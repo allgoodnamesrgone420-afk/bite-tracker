@@ -41,6 +41,7 @@ function Brand({ subtitle }: { subtitle: string }) {
 function SignIn({ online }: { online: boolean }) {
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +59,8 @@ function SignIn({ online }: { online: boolean }) {
         const { error } = await sb.auth.signInWithPassword({ email: e, password });
         if (error) setError(friendly(error.message));
       } else if (mode === "signup") {
-        const { data, error } = await sb.auth.signUp({ email: e, password, options: { emailRedirectTo: window.location.origin } });
+        const display_name = name.trim().replace(/\s+/g, " ").slice(0, 40);
+        const { data, error } = await sb.auth.signUp({ email: e, password, options: { emailRedirectTo: window.location.origin, data: display_name ? { display_name } : {} } });
         if (error) setError(friendly(error.message));
         else if (!data.session) setMode("sent-confirm");
       } else if (mode === "forgot") {
@@ -116,6 +118,12 @@ function SignIn({ online }: { online: boolean }) {
       >
         <h2 className="sr-only">{title}</h2>
         {mode === "forgot" && <p className="text-sm text-ink-2">Enter your email and we&apos;ll send a link to set a new password.</p>}
+        {mode === "signup" && (
+          <label className="field">
+            <span>Your name</span>
+            <input autoComplete="given-name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} />
+          </label>
+        )}
         <label className="field">
           <span>Email</span>
           <input type="email" autoComplete="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required />

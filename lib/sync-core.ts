@@ -14,6 +14,22 @@ export type FoodChange = PersonalFood | null;
 export type RemoteItemRow = { id: string; date: string; item: LogItem; deleted: boolean; updated_at: string };
 export type RemoteFoodRow = { key: string; food: PersonalFood | null; deleted: boolean; updated_at: string };
 
+/**
+ * Small keyed records that sync through one generic table: weigh-ins (key =
+ * date), saved meals, recipes, the coach's memory and chat history.
+ */
+export const RECORD_KINDS = ["weight", "meal", "recipe", "memory", "chat"] as const;
+export type RecordKind = (typeof RECORD_KINDS)[number];
+/** Outbox key is `${kind}/${key}`; `null` means deleted. */
+export type RecordChange = unknown;
+export type RemoteRecordRow = { kind: RecordKind; key: string; data: unknown; deleted: boolean; updated_at: string };
+
+export const recordId = (kind: RecordKind, key: string) => `${kind}/${key}`;
+export function splitRecordId(id: string): { kind: RecordKind; key: string } {
+  const i = id.indexOf("/");
+  return { kind: id.slice(0, i) as RecordKind, key: id.slice(i + 1) };
+}
+
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Items added, changed or removed between two versions of a day. */
@@ -33,6 +49,35 @@ export function diffFoods(prev: Record<string, PersonalFood>, next: Record<strin
   for (const [k, f] of Object.entries(next)) if (!same(prev[k], f)) out[k] = f;
   for (const k of Object.keys(prev)) if (!(k in next)) out[k] = null;
   return out;
+}
+
+export function diffRecords(kind: RecordKind, prev: Record<string, unknown>, next: Record<string, unknown>): Record<string, RecordChange> {
+  const out: Record<string, RecordChange> = {};
+  for (const [k, v] of Object.entries(next)) if (!same(prev[k], v)) out[recordId(kind, k)] = v;
+  for (const k of Object.keys(prev)) if (!(k in next)) out[recordId(kind, k)] = null;
+  return out;
+}
+
+/** Merge remote record rows. Returns the full new map for each kind that changed. */
+export function applyRemoteRecords(
+  current: Partial<Record<RecordKind, Record<string, unknown>>>,
+  rows: RemoteRecordRow[],
+  pending: Set<string>,
+): Partial<Record<RecordKind, Record<string, unknown>>> {
+  const changed: Partial<Record<RecordKind, Record<string, unknown>>> = {};
+  for (const r of rows) {
+    if (!(RECORD_KINDS as readonly string[]).includes(r.kind) || pending.has(recordId(r.kind, r.key))) continue;
+    const cur = changed[r.kind] ?? current[r.kind] ?? {};
+    if (r.deleted || r.data === null) {
+      if (!(r.key in cur)) continue;
+      const next = { ...cur };
+      delete next[r.key];
+      changed[r.kind] = next;
+    } else if (!same(cur[r.key], r.data)) {
+      changed[r.kind] = { ...cur, [r.key]: r.data };
+    }
+  }
+  return changed;
 }
 
 /**

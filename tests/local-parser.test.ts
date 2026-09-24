@@ -76,8 +76,8 @@ describe("localParse", () => {
   });
 
   it("refuses to guess unknown dishes", () => {
-    const r = localParse("2 bowls quinoa salad and 1 banana", at(13));
-    expect(r.unknown).toEqual(["2 bowls quinoa salad"]);
+    const r = localParse("2 plates shakshuka and 1 banana", at(13));
+    expect(r.unknown).toEqual(["2 plates shakshuka"]);
     expect(r.items.map((i) => i.name)).toEqual(["Banana"]);
     expect(r.complete).toBe(false);
   });

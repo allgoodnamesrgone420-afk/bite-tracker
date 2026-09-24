@@ -9,11 +9,13 @@
     "lint": "eslint",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "db:setup": "node --env-file=.env.local scripts/db-setup.mjs"
+    "db:setup": "node --env-file=.env.local scripts/db-setup.mjs",
+    "postinstall": "node scripts/copy-wasm.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.128.0",
     "@supabase/supabase-js": "2.117.1",
+    "barcode-detector": "3.2.2",
     "idb-keyval": "6.3.0",
     "next": "16.3.6",
     "openai": "7.23.0",

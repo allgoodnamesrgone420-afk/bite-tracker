@@ -1,7 +1,7 @@
 "use client";
 /**
  * Two-way sync between this device's IndexedDB and Supabase.
- *   push: upsert everything in the outbox (items, foods, profile)
+ *   push: upsert everything in the outbox (items, foods, records, profile)
  *   pull: fetch rows updated since the last cursor and merge them locally
  * Server-assigned updated_at orders changes; unpushed local edits win until
  * they're pushed. Safe to call often; concurrent calls are coalesced.
@@ -9,7 +9,18 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import * as db from "./db";
 import type { DayLog, Profile, TargetOverrides } from "./schemas";
-import { applyRemoteFoods, applyRemoteItems, maxTimestamp, type RemoteFoodRow, type RemoteItemRow } from "./sync-core";
+import {
+  RECORD_KINDS,
+  applyRemoteFoods,
+  applyRemoteItems,
+  applyRemoteRecords,
+  maxTimestamp,
+  splitRecordId,
+  type RecordKind,
+  type RemoteFoodRow,
+  type RemoteItemRow,
+  type RemoteRecordRow,
+} from "./sync-core";
 
 const PAGE = 500;
 const OVERLAP_MS = 5_000; // re-read a few seconds back to catch concurrent commits
@@ -46,15 +57,17 @@ async function push(sb: SupabaseClient, userId: string): Promise<number> {
     deleted: c.item === null,
   }));
   const foods = Object.entries(out.foods).map(([key, f]) => ({ user_id: userId, key, food: f, deleted: f === null }));
+  const records = Object.entries(out.records).map(([id, data]) => ({ user_id: userId, ...splitRecordId(id), data, deleted: data === null }));
 
   for (let i = 0; i < items.length; i += PAGE) check(await sb.from("log_items").upsert(items.slice(i, i + PAGE), { onConflict: "id" }));
   for (let i = 0; i < foods.length; i += PAGE) check(await sb.from("my_foods").upsert(foods.slice(i, i + PAGE), { onConflict: "user_id,key" }));
+  for (let i = 0; i < records.length; i += PAGE) check(await sb.from("records").upsert(records.slice(i, i + PAGE), { onConflict: "user_id,kind,key" }));
   if (out.profile) {
     const [profile, overrides] = await Promise.all([db.getProfile(), db.getOverrides()]);
     check(await sb.from("profiles").upsert({ user_id: userId, profile: profile ?? null, overrides }, { onConflict: "user_id" }));
   }
   await db.ackOutbox(out);
-  return items.length + foods.length + (out.profile ? 1 : 0);
+  return items.length + foods.length + records.length + (out.profile ? 1 : 0);
 }
 
 async function pullTable<T extends { updated_at: string }>(sb: SupabaseClient, table: string, cols: string, since: string | null): Promise<T[]> {
@@ -72,9 +85,10 @@ async function pull(sb: SupabaseClient): Promise<{ count: number; changed: boole
   const { cursor } = await db.getSyncMeta();
   const since = cursor ? new Date(Date.parse(cursor) - OVERLAP_MS).toISOString() : null;
 
-  const [itemRows, foodRows, profileRows] = await Promise.all([
+  const [itemRows, foodRows, recordRows, profileRows] = await Promise.all([
     pullTable<RemoteItemRow>(sb, "log_items", "id,date,item,deleted,updated_at", since),
     pullTable<RemoteFoodRow>(sb, "my_foods", "key,food,deleted,updated_at", since),
+    pullTable<RemoteRecordRow>(sb, "records", "kind,key,data,deleted,updated_at", since),
     pullTable<{ profile: Profile | null; overrides: TargetOverrides; updated_at: string }>(sb, "profiles", "profile,overrides,updated_at", since),
   ]);
   const pending = await db.getOutbox();
@@ -96,6 +110,14 @@ async function pull(sb: SupabaseClient): Promise<{ count: number; changed: boole
     }
   }
 
+  if (recordRows.length) {
+    const kinds = [...new Set(recordRows.map((r) => r.kind))].filter((k): k is RecordKind => (RECORD_KINDS as readonly string[]).includes(k));
+    const current = Object.fromEntries(await Promise.all(kinds.map(async (k) => [k, await db.getRecords(k)] as const)));
+    const updated = applyRemoteRecords(current, recordRows, new Set(Object.keys(pending.records)));
+    for (const [kind, recs] of Object.entries(updated)) await db.saveRecords(kind as RecordKind, recs, { fromSync: true });
+    changed ||= Object.keys(updated).length > 0;
+  }
+
   const remoteProfile = profileRows.at(-1);
   if (remoteProfile && !pending.profile) {
     if (remoteProfile.profile) await db.saveProfile(remoteProfile.profile, { fromSync: true });
@@ -103,8 +125,8 @@ async function pull(sb: SupabaseClient): Promise<{ count: number; changed: boole
     changed = true;
   }
 
-  const next = maxTimestamp(cursor, [...itemRows, ...foodRows, ...profileRows]);
+  const next = maxTimestamp(cursor, [...itemRows, ...foodRows, ...recordRows, ...profileRows]);
   if (next && next !== cursor) await db.setSyncCursor(next);
-  return { count: itemRows.length + foodRows.length + profileRows.length, changed };
+  return { count: itemRows.length + foodRows.length + recordRows.length + profileRows.length, changed };
 }
 

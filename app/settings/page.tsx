@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp } from "@/components/AppProvider";
 import { Icon, PopButton, fmtInt } from "@/components/ui";
@@ -9,7 +10,7 @@ import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
 import { ProfileSchema, type Profile, type TargetOverrides } from "@/lib/schemas";
 import { computeTargets } from "@/lib/targets";
 
-type Draft = Record<keyof Profile, string>;
+type Draft = Record<Exclude<keyof Profile, "adaptive">, string>;
 const OVERRIDE_KEYS = ["calories", "protein_g", "carbs_g", "fat_g", "fibre_g"] as const;
 const OVERRIDE_LABEL = { calories: "Calories", protein_g: "Protein g", carbs_g: "Carbs g", fat_g: "Fat g", fibre_g: "Fibre g" };
 
@@ -25,9 +26,10 @@ const toDraft = (p: Profile | null): Draft => ({
   healthNotes: p?.healthNotes ?? "",
 });
 
-function parseDraft(d: Draft) {
+function parseDraft(d: Draft, adaptive: boolean) {
   return ProfileSchema.safeParse({
     ...d,
+    adaptive,
     age: Number(d.age),
     heightCm: Number(d.heightCm),
     weightKg: Number(d.weightKg),
@@ -43,23 +45,26 @@ export default function SettingsPage() {
 }
 
 function SettingsForm({ profile, overrides }: { profile: Profile | null; overrides: TargetOverrides }) {
-  const { saveSettings, reloadAll } = useApp();
+  const { saveSettings, reloadAll, adapt, tdee } = useApp();
   const [draft, setDraft] = useState<Draft>(() => toDraft(profile));
+  const [adaptive, setAdaptive] = useState(profile?.adaptive !== false);
   const [ov, setOv] = useState<Record<(typeof OVERRIDE_KEYS)[number], string>>(() =>
     Object.fromEntries(OVERRIDE_KEYS.map((k) => [k, overrides[k] ? String(overrides[k]) : ""])) as Record<(typeof OVERRIDE_KEYS)[number], string>,
   );
   const [saved, setSaved] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
 
-  const parsed = parseDraft(draft);
+  const parsed = parseDraft(draft, adaptive);
   const overrideValues: TargetOverrides = useMemo(
     () => Object.fromEntries(OVERRIDE_KEYS.filter((k) => Number(ov[k]) > 0).map((k) => [k, Number(ov[k])])),
     [ov],
   );
-  const calc = parsed.success ? computeTargets(parsed.data, overrideValues) : null;
-  const fieldError = (k: keyof Profile) => (showErrors && !parsed.success ? parsed.error.issues.find((i) => i.path[0] === k)?.message : undefined);
+  // Preview with your trend weight, and adaptive maintenance when it's switched on.
+  const previewAdapt = adaptive && tdee?.ok ? { weightKg: adapt.weightKg, tdee: tdee.tdee, tdeeNote: adapt.tdeeNote ?? `${tdee.days} logged days, ${tdee.weighIns} weigh-ins` } : { weightKg: adapt.weightKg };
+  const calc = parsed.success ? computeTargets(parsed.data, overrideValues, previewAdapt) : null;
+  const fieldError = (k: keyof Draft) => (showErrors && !parsed.success ? parsed.error.issues.find((i) => i.path[0] === k)?.message : undefined);
 
-  const set = (k: keyof Profile) => (e: { target: { value: string } }) => {
+  const set = (k: keyof Draft) => (e: { target: { value: string } }) => {
     setDraft((d) => ({ ...d, [k]: e.target.value }));
     setSaved(false);
   };
@@ -68,9 +73,12 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
     <div className="space-y-6 pb-4">
       <header>
         <p className="label">Settings</p>
-        <h1 className="text-2xl font-extrabold tracking-tight">You &amp; your targets</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight lg:text-3xl">You &amp; your targets</h1>
       </header>
 
+      <div className="space-y-6 lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-start lg:gap-8 lg:space-y-0">
+      <div className="space-y-6">
+      <NameSection />
       <form
         className="space-y-3"
         onSubmit={async (e) => {
@@ -97,6 +105,11 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
           <Field label="Weight (kg)" error={fieldError("weightKg")}>
             <input inputMode="decimal" value={draft.weightKg} onChange={set("weightKg")} />
           </Field>
+          {adapt.weightKg && (
+            <p className="col-span-2 -mt-1 text-xs text-ink-2">
+              Targets use your weigh-in trend (<span className="num font-semibold">{adapt.weightKg.toFixed(1)} kg</span>) instead. Log weight on the Progress tab.
+            </p>
+          )}
         </div>
         <Field label="Activity">
           <select value={draft.activity} onChange={set("activity")}>
@@ -125,13 +138,34 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
           <input value={draft.healthNotes} maxLength={300} onChange={set("healthNotes")} placeholder="e.g. type 2 diabetes" />
         </Field>
 
+        <label className="card flex cursor-pointer items-start gap-3 p-4">
+          <input type="checkbox" className="mt-1 h-5 w-5 shrink-0 accent-[var(--lime)]" checked={adaptive} onChange={(e) => (setAdaptive(e.target.checked), setSaved(false))} />
+          <span>
+            <span className="block font-bold">Adapt to my data</span>
+            <span className="mt-0.5 block text-xs text-ink-2">
+              Once you&apos;ve logged about 2 weeks and weighed in a few times, Bite estimates the maintenance calories you actually burn and uses that instead of the
+              formula. Safety floors and the 1%/week cap still apply.
+            </span>
+            {tdee && (
+              <span className={`mt-1.5 block text-xs font-semibold ${tdee.ok ? "text-ok" : "text-ink-3"}`}>
+                {tdee.ok
+                  ? `Your data says ~${fmtInt(tdee.fromData)} kcal/day maintenance (${tdee.confidence} confidence, ${tdee.days} days, ${tdee.weighIns} weigh-ins).`
+                  : `Not enough data yet: needs ${tdee.need}.`}
+              </span>
+            )}
+          </span>
+        </label>
+
         {calc && (
           <section className="plunk face-card space-y-4 p-4" aria-live="polite">
             <div className="flex items-end justify-between">
               <div>
                 <p className="label">Daily target</p>
                 <p className="hero-num num mt-1 text-[56px]">{fmtInt(calc.targets.calories)}</p>
-                <p className="text-sm text-ink-2">kcal · maintenance {fmtInt(calc.tdee)}</p>
+                <p className="text-sm text-ink-2">
+                  kcal · maintenance {fmtInt(calc.tdee)}
+                  {calc.adaptive && <span className="ml-1.5 tag text-ok">from your data</span>}
+                </p>
               </div>
               <div className="num space-y-0.5 text-right text-sm font-semibold">
                 <p className="text-protein">P {calc.targets.protein_g}g</p>
@@ -208,14 +242,52 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
         </PopButton>
       </form>
 
+      </div>
+      <div className="space-y-6">
       {syncConfigured && <AccountSection />}
       {syncConfigured && <PeopleSection />}
-      <AISection />
       <AppearanceSection />
-      <MyFoodsSection />
+      <Link href="/foods" className="card flex items-center gap-3 p-4 hover:bg-elevated">
+        <Icon.book size={20} />
+        <span className="flex-1">
+          <span className="block font-bold">My foods, meals &amp; recipes</span>
+          <span className="block text-xs text-ink-2">Calibrated foods, saved meals and recipes live on the Foods tab.</span>
+        </span>
+        <Icon.right size={16} />
+      </Link>
+      <AISection />
       {!syncConfigured && <PasscodeSection />}
       <BackupSection onImported={reloadAll} />
+      </div>
+      </div>
     </div>
+  );
+}
+
+function NameSection() {
+  const { name, setName } = useApp();
+  const [value, setValue] = useState(name);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <form
+      className="card flex items-end gap-2 p-4"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const r = await setName(value);
+        setMsg(r.ok ? { ok: true, text: "Saved" } : { ok: false, text: r.message ?? "Couldn't save." });
+      }}
+    >
+      <div className="flex-1">
+        <label className="field compact">
+          <span>Your name</span>
+          <input value={value} maxLength={40} autoComplete="given-name" onChange={(e) => (setValue(e.target.value), setMsg(null))} placeholder="What should Bite call you?" />
+        </label>
+        {msg && <p className={`mt-1 text-xs ${msg.ok ? "text-ok" : "text-over"}`} role="status">{msg.text}</p>}
+      </div>
+      <button type="submit" className="pop-btn sm lime shrink-0" disabled={value.trim() === name}>
+        Save
+      </button>
+    </form>
   );
 }
 
@@ -273,10 +345,74 @@ function AccountSection() {
           Sync now
         </PopButton>
         <PopButton variant="ghost" size="sm" onClick={() => void signOut()}>
-          Sign out
+          <Icon.logout size={14} /> Sign out
         </PopButton>
       </div>
+      <ChangePassword />
     </section>
+  );
+}
+
+function ChangePassword() {
+  const { changePassword } = useApp();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirmNext, setConfirmNext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!open) {
+    return (
+      <button className="text-[11px] font-bold uppercase tracking-[0.1em] text-ink-2 underline decoration-lime decoration-2 underline-offset-4 hover:text-ink" onClick={() => setOpen(true)}>
+        Change password
+      </button>
+    );
+  }
+  return (
+    <form
+      className="space-y-2 border-t border-line pt-3"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (next.length < 8) return setMsg({ ok: false, text: "New password needs at least 8 characters." });
+        if (next !== confirmNext) return setMsg({ ok: false, text: "The new passwords don't match." });
+        setBusy(true);
+        const r = await changePassword(current, next);
+        setBusy(false);
+        setMsg({ ok: r.ok, text: r.message });
+        if (r.ok) {
+          setCurrent("");
+          setNext("");
+          setConfirmNext("");
+        }
+      }}
+    >
+      <p className="label">Change password</p>
+      <label className="field compact">
+        <span>Current password</span>
+        <input type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} required />
+      </label>
+      <label className="field compact">
+        <span>New password (8+ characters)</span>
+        <input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} minLength={8} required />
+      </label>
+      <label className="field compact">
+        <span>Repeat new password</span>
+        <input type="password" autoComplete="new-password" value={confirmNext} onChange={(e) => setConfirmNext(e.target.value)} minLength={8} required />
+      </label>
+      {msg && (
+        <p role="status" className={`text-xs ${msg.ok ? "text-ok" : "text-over"}`}>
+          {msg.text}
+        </p>
+      )}
+      <div className="flex gap-3">
+        <PopButton type="submit" variant="lime" size="sm" disabled={busy || !current || !next}>
+          {busy ? "Saving…" : "Update password"}
+        </PopButton>
+        <PopButton variant="ghost" size="sm" onClick={() => (setOpen(false), setMsg(null))}>
+          Cancel
+        </PopButton>
+      </div>
+    </form>
   );
 }
 
@@ -452,51 +588,6 @@ function AppearanceSection() {
           </button>
         ))}
       </div>
-    </section>
-  );
-}
-
-function MyFoodsSection() {
-  const { myFoods, forgetFood } = useApp();
-  const [showAll, setShowAll] = useState(false);
-  const list = Object.values(myFoods).sort((a, b) => Number(b.verified) - Number(a.verified) || b.uses - a.uses);
-  const shown = showAll ? list : list.slice(0, 8);
-  return (
-    <section className="card space-y-3 p-4">
-      <div>
-        <p className="label">My foods</p>
-        <p className="mt-1 text-xs text-ink-2">
-          Everything you log is remembered, so it parses instantly next time. Edit the numbers when you log a food and it becomes{" "}
-          <span className="font-semibold text-ok">calibrated</span>: your values win over the library and AI from then on.
-        </p>
-      </div>
-      {list.length === 0 ? (
-        <p className="text-sm text-ink-3">Nothing yet. Log a few meals.</p>
-      ) : (
-        <ul className="divide-y divide-line-soft border-y border-line-soft">
-          {shown.map((f) => (
-            <li key={f.key} className="flex items-center gap-2 py-2">
-              <div className="min-w-0 flex-1">
-                <p className="flex items-center gap-2 truncate text-sm font-semibold">
-                  {f.name}
-                  {f.verified && <span className="tag text-ok">Calibrated</span>}
-                </p>
-                <p className="num text-xs text-ink-2">
-                  per {f.unit}: {Math.round(f.per[0])} kcal · P {f.per[1]} · C {f.per[2]} · F {f.per[3]} · logged {f.uses}×
-                </p>
-              </div>
-              <button onClick={() => forgetFood(f.key)} className="flex h-9 w-9 items-center justify-center text-ink-3 hover:text-over" aria-label={`Forget ${f.name}`}>
-                <Icon.trash size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {list.length > 8 && (
-        <button className="text-xs font-bold uppercase tracking-[0.1em] text-ink-2" onClick={() => setShowAll((s) => !s)}>
-          {showAll ? "Show fewer" : `Show all ${list.length}`}
-        </button>
-      )}
     </section>
   );
 }

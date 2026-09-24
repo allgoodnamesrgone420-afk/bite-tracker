@@ -1,17 +1,19 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { apiParse, apiParsePhoto } from "@/lib/api-client";
+import { apiBarcode, apiParse, apiParsePhoto } from "@/lib/api-client";
 import { preparePhoto } from "@/lib/image";
-import { applyCalibration, itemFromPersonal, learnFoods, nutrientsOf, personalAsFoods, type Origin, type PersonalFood } from "@/lib/calibration";
+import { applyCalibration, foodKey, itemFromPersonal, learnFoods, nutrientsOf, personalAsFoods, type Origin, type PersonalFood } from "@/lib/calibration";
 import { localCorrection } from "@/lib/corrections";
 import * as db from "@/lib/db";
 import type { DaySummary } from "@/lib/db";
+import { MAX_MEALS, MAX_RECIPES, recipeFood, type Recipe, type SavedMeal } from "@/lib/library";
 import { localParse, type LocalParse } from "@/lib/local-parser";
 import { LogItemSchema, ParsedItemSchema, type ApiErrorCode, type DayLog, type LogItem, type Meal, type ParsedItem, type ParseRequest, type Profile, type TargetOverrides } from "@/lib/schemas";
 import { supabase, syncConfigured } from "@/lib/supabase";
 import { syncNow } from "@/lib/sync";
-import { computeTargets, type TargetCalc } from "@/lib/targets";
+import { computeTargets, type Adapt, type TargetCalc } from "@/lib/targets";
 import { dateKey, mealForTime, sumItems } from "@/lib/totals";
+import { currentWeight, estimateTdee, type TdeeEstimate, type Weights } from "@/lib/weight";
 
 export type DraftItem = ParsedItem & {
   key: string;
@@ -22,7 +24,7 @@ export type DraftItem = ParsedItem & {
   needsInput?: boolean;
 };
 
-export type Engine = "local" | "llm" | "cache" | "manual";
+export type Engine = "local" | "llm" | "cache" | "manual" | "barcode";
 
 export type Sheet =
   | { kind: "closed" }
@@ -31,7 +33,14 @@ export type Sheet =
   | { kind: "error"; text: string; code: ApiErrorCode; message: string; retry?: ParseRequest }
   | { kind: "passcode"; retry: ParseRequest }
   | { kind: "nonfood"; text: string }
-  | { kind: "edit"; item: LogItem };
+  | { kind: "edit"; item: LogItem }
+  /** The "+" menu: manual entry, barcode, saved meals. */
+  | { kind: "add"; text: string }
+  | { kind: "barcode" }
+  /** `then`: the confirm sheet to return to after saving (so you can still log it). */
+  | { kind: "saveMeal"; items: ParsedItem[]; name: string; then?: Extract<Sheet, { kind: "review" }> };
+
+export type EstimateResult = { ok: true; items: ParsedItem[]; unknown: string[]; engine: Engine } | { ok: false; message: string };
 
 export type CorrectionResult = { ok: true; items: ParsedItem[]; notice?: string } | { ok: false; message: string };
 
@@ -41,7 +50,7 @@ export type Account = {
   /** Supabase connected on this deployment (otherwise local-only mode). */
   configured: boolean;
   ready: boolean;
-  user: { id: string; email: string } | null;
+  user: { id: string; email: string; name: string } | null;
   /** Arrived via a password-reset link: show "set new password". */
   recovering: boolean;
 };
@@ -57,6 +66,16 @@ type AppState = {
   profile: Profile | null;
   overrides: TargetOverrides;
   calc: TargetCalc | null;
+  /** Inputs from your own data used for targets (trend weight, adaptive maintenance). */
+  adapt: Adapt;
+  tdee: TdeeEstimate | null;
+  weights: Weights;
+  meals: Record<string, SavedMeal>;
+  recipes: Record<string, Recipe>;
+  /** Display name: from the account, or this device in local-only mode. */
+  name: string;
+  /** Bumps whenever data reloads (e.g. after a sync), so pages can refetch. */
+  dataVersion: number;
   myFoods: Record<string, PersonalFood>;
   pending: Pending | null;
   sheet: Sheet;
@@ -79,6 +98,19 @@ type AppState = {
   repeatItems: (items: LogItem[], label: string, meal?: Meal) => void;
   reloadAll: () => Promise<void>;
   dismissToast: () => void;
+  showToast: (message: string, undo?: () => void) => void;
+  openReview: (items: ParsedItem[], text: string, engine: Engine) => void;
+  logWeight: (date: string, kg: number) => Promise<void>;
+  deleteWeight: (date: string) => Promise<void>;
+  saveMeal: (name: string, items: ParsedItem[], then?: Sheet) => Promise<void>;
+  deleteMeal: (id: string) => Promise<void>;
+  logSavedMeal: (id: string) => void;
+  saveRecipe: (r: Recipe) => Promise<void>;
+  deleteRecipe: (id: string) => Promise<void>;
+  estimateItems: (text: string, opts?: { preferAI?: boolean }) => Promise<EstimateResult>;
+  lookupBarcode: (code: string) => Promise<{ ok: true } | { ok: false; code: ApiErrorCode; message: string }>;
+  setName: (name: string) => Promise<{ ok: boolean; message?: string }>;
+  changePassword: (current: string, next: string) => Promise<{ ok: boolean; message: string }>;
   account: Account;
   sync: SyncState;
   syncNow: () => Promise<void>;
@@ -111,14 +143,18 @@ function subscribeOnline(cb: () => void) {
 
 async function loadSnapshot() {
   const date = dateKey();
-  const [profile, overrides, day, summaries, myFoods] = await Promise.all([
+  const [profile, overrides, day, summaries, myFoods, weights, meals, recipes, localName] = await Promise.all([
     db.getProfile(),
     db.getOverrides(),
     db.getDay(date),
     db.getSummaries(),
     db.getMyFoods(),
+    db.getRecords<Weights[string]>("weight"),
+    db.getRecords<SavedMeal>("meal"),
+    db.getRecords<Recipe>("recipe"),
+    db.getLocalName(),
   ]);
-  return { profile: profile ?? null, overrides, day, summaries, myFoods };
+  return { profile: profile ?? null, overrides, day, summaries, myFoods, weights, meals, recipes, localName: localName ?? "" };
 }
 
 export const blankRow = (name = "", meal: Meal = mealForTime(), needsInput = false): DraftItem => ({
@@ -161,9 +197,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<Toast | null>(null);
   const [account, setAccount] = useState<Account>({ configured: syncConfigured, ready: !syncConfigured, user: null, recovering: false });
   const [sync, setSync] = useState<SyncState>({ status: "off", lastSyncedAt: null });
+  const [weights, setWeights] = useState<Weights>({});
+  const [meals, setMeals] = useState<Record<string, SavedMeal>>({});
+  const [recipes, setRecipes] = useState<Record<string, Recipe>>({});
+  const [localName, setLocalName] = useState("");
+  const [dataVersion, setDataVersion] = useState(0);
   const today = day.date;
+  const name = (syncConfigured ? account.user?.name : localName) ?? "";
 
-  const calc = useMemo(() => (profile ? computeTargets(profile, overrides) : null), [profile, overrides]);
+  // Targets: formula first, then refined by your trend weight and (when there's
+  // enough data and adaptive is on) the maintenance your logs + weigh-ins imply.
+  const { calc, adapt, tdee } = useMemo(() => {
+    if (!profile) return { calc: null, adapt: {}, tdee: null };
+    const w = currentWeight(weights, today);
+    const base: Adapt = w ? { weightKg: w.trend } : {};
+    const formula = computeTargets(profile, overrides, base);
+    const est = estimateTdee({ rows: summaries, weights, today, fallback: formula.targets, formulaTdee: formula.formulaTdee });
+    if (profile.adaptive === false || !est.ok) return { calc: formula, adapt: base, tdee: est };
+    const adapt: Adapt = {
+      ...base,
+      tdee: est.tdee,
+      tdeeNote: `${est.days} logged days, ${est.weighIns} weigh-ins (${est.confidence} confidence); formula says ${formula.formulaTdee.toLocaleString("en-IN")}`,
+    };
+    return { calc: computeTargets(profile, overrides, adapt), adapt, tdee: est };
+  }, [profile, overrides, weights, summaries, today]);
 
   // Refs let async callbacks read the latest state without re-creating themselves.
   const dayRef = useRef(day);
@@ -181,6 +238,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setDay(snap.day);
     setSummaries(snap.summaries);
     setMyFoods(snap.myFoods);
+    setWeights(snap.weights);
+    setMeals(snap.meals);
+    setRecipes(snap.recipes);
+    setLocalName(snap.localName);
+    setDataVersion((v) => v + 1);
     setReady(true);
   }, []);
 
@@ -208,7 +270,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const sb = supabase();
     if (!sb) return;
-    const toUser = (u: { id: string; email?: string } | null | undefined) => (u ? { id: u.id, email: u.email ?? "" } : null);
+    const toUser = (u: { id: string; email?: string; user_metadata?: { display_name?: unknown } } | null | undefined) =>
+      u ? { id: u.id, email: u.email ?? "", name: typeof u.user_metadata?.display_name === "string" ? u.user_metadata.display_name : "" } : null;
     sb.auth.getSession().then(({ data }) => setAccount((a) => ({ ...a, ready: true, user: toUser(data.session?.user) })));
     const { data } = sb.auth.onAuthStateChange((event, session) => {
       setAccount((a) => ({
@@ -292,11 +355,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     const sb = supabase();
     if (!sb) return;
-    const out = await db.getOutbox();
-    const unsynced = Object.keys(out.items).length + Object.keys(out.foods).length + out.profile;
+    const unsynced = db.outboxSize(await db.getOutbox());
     if (unsynced && navigator.onLine) await runSync();
-    const left = await db.getOutbox();
-    const stillUnsynced = Object.keys(left.items).length + Object.keys(left.foods).length + left.profile;
+    const stillUnsynced = db.outboxSize(await db.getOutbox());
     if (stillUnsynced && !confirm(`${stillUnsynced} change(s) haven't synced yet and will be lost if you sign out now. Sign out anyway?`)) return;
     await sb.auth.signOut();
     await db.clearLocal(); // your data stays safe in your account
@@ -577,6 +638,154 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await db.saveMyFoods(next);
   }, []);
 
+  const openReview = useCallback((items: ParsedItem[], text: string, engine: Engine) => {
+    setSheet({ kind: "review", text, rows: toRows(applyCalibration(items, foodsRef.current)), engine });
+  }, []);
+
+  /* ------------------------------ weigh-ins ------------------------------ */
+
+  const logWeight = useCallback(async (date: string, kg: number) => {
+    const next = { ...(await db.getRecords<Weights[string]>("weight")), [date]: { kg: Math.round(kg * 10) / 10, at: Date.now() } };
+    await db.saveRecords("weight", next);
+    setWeights(next);
+  }, []);
+
+  const deleteWeight = useCallback(async (date: string) => {
+    const next = { ...(await db.getRecords<Weights[string]>("weight")) };
+    delete next[date];
+    await db.saveRecords("weight", next);
+    setWeights(next);
+  }, []);
+
+  /* --------------------------- meals & recipes --------------------------- */
+
+  const saveMeal = useCallback(
+    async (mealName: string, items: ParsedItem[], then: Sheet = { kind: "closed" }) => {
+      const cur = await db.getRecords<SavedMeal>("meal");
+      if (Object.keys(cur).length >= MAX_MEALS) return showToast(`You can save up to ${MAX_MEALS} meals. Delete one first.`);
+      const clean = items.map((i) => ParsedItemSchema.parse(i));
+      const m: SavedMeal = { id: uid(), name: mealName.trim().slice(0, 60) || "My meal", items: clean, createdAt: Date.now(), uses: 0 };
+      const next = { ...cur, [m.id]: m };
+      await db.saveRecords("meal", next);
+      setMeals(next);
+      setSheet(then);
+      showToast(`Saved "${m.name}". Find it under + and in Foods.`);
+    },
+    [showToast],
+  );
+
+  const deleteMeal = useCallback(async (id: string) => {
+    const next = { ...(await db.getRecords<SavedMeal>("meal")) };
+    delete next[id];
+    await db.saveRecords("meal", next);
+    setMeals(next);
+  }, []);
+
+  const logSavedMeal = useCallback((id: string) => {
+    void (async () => {
+      const cur = await db.getRecords<SavedMeal>("meal");
+      const m = cur[id];
+      if (!m) return;
+      const meal = mealForTime();
+      setSheet({ kind: "review", text: m.name, rows: toRows(applyCalibration(m.items.map((i) => ({ ...i, meal })), foodsRef.current)), engine: "cache" });
+      const next = { ...cur, [id]: { ...m, uses: m.uses + 1 } };
+      await db.saveRecords("meal", next);
+      setMeals(next);
+    })();
+  }, []);
+
+  const saveRecipe = useCallback(
+    async (r: Recipe) => {
+      const cur = await db.getRecords<Recipe>("recipe");
+      if (!cur[r.id] && Object.keys(cur).length >= MAX_RECIPES) return showToast(`You can save up to ${MAX_RECIPES} recipes. Delete one first.`);
+      const prev = cur[r.id];
+      const next = { ...cur, [r.id]: r };
+      await db.saveRecords("recipe", next);
+      setRecipes(next);
+      // The recipe becomes a calibrated food, so "1 serving <name>" parses to it.
+      const foods = { ...foodsRef.current };
+      if (prev && foodKey(prev.name) !== foodKey(r.name)) delete foods[foodKey(prev.name)];
+      foods[foodKey(r.name)] = recipeFood(r, foods[foodKey(r.name)]);
+      setMyFoods(foods);
+      await db.saveMyFoods(foods);
+    },
+    [showToast],
+  );
+
+  const deleteRecipe = useCallback(async (id: string) => {
+    const cur = await db.getRecords<Recipe>("recipe");
+    const r = cur[id];
+    if (!r) return;
+    const next = { ...cur };
+    delete next[id];
+    await db.saveRecords("recipe", next);
+    setRecipes(next);
+    const foods = { ...foodsRef.current };
+    delete foods[foodKey(r.name)];
+    setMyFoods(foods);
+    await db.saveMyFoods(foods);
+  }, []);
+
+  /** Text → items without opening a sheet (recipe builder, saved meals). */
+  const estimateItems = useCallback(
+    async (text: string, opts: { preferAI?: boolean } = {}): Promise<EstimateResult> => {
+      const local = localParse(text, personalAsFoods(foodsRef.current));
+      // Recipes list raw ingredients ("250 g rajma, dry"); the library holds cooked dishes, so ask the AI first.
+      if (local.complete && !(opts.preferAI && navigator.onLine)) return { ok: true, items: local.items, unknown: [], engine: "local" };
+      const partial = local.items.length > 0 || local.unknown.length > 0;
+      const fallback = (why: string): EstimateResult =>
+        partial ? { ok: true, items: local.items, unknown: local.unknown, engine: "local" } : { ok: false, message: why };
+      if (!navigator.onLine) return fallback("You're offline. Add ingredients the food library knows, or try again online.");
+      const res = await apiParse({ text, localTime: localTime(), diet: profile?.diet || undefined, skipClarification: true });
+      if (!res.ok) return fallback(res.error.message);
+      if (!res.data.items.length) return fallback("Couldn't find any food in that.");
+      return { ok: true, items: applyCalibration(res.data.items, foodsRef.current), unknown: [], engine: "llm" };
+    },
+    [profile],
+  );
+
+  const lookupBarcode = useCallback(async (code: string) => {
+    const res = await apiBarcode(code, mealForTime());
+    if (!res.ok) return { ok: false as const, code: res.error.code, message: res.error.message };
+    setSheet({ kind: "review", text: `Barcode ${code}`, rows: toRows(applyCalibration([res.data.item], foodsRef.current)), engine: "barcode" });
+    return { ok: true as const };
+  }, []);
+
+  /* ------------------------------ account ------------------------------ */
+
+  const setName = useCallback(async (raw: string) => {
+    const n = raw.trim().replace(/\s+/g, " ").slice(0, 40);
+    const sb = supabase();
+    if (!sb) {
+      await db.saveLocalName(n);
+      setLocalName(n);
+      return { ok: true };
+    }
+    const { data, error } = await sb.auth.updateUser({ data: { display_name: n } });
+    if (error) return { ok: false, message: "Couldn't save your name. Check your connection." };
+    setAccount((a) => (a.user && data.user ? { ...a, user: { ...a.user, name: n } } : a));
+    return { ok: true };
+  }, []);
+
+  const changePassword = useCallback(
+    async (current: string, next: string) => {
+      const sb = supabase();
+      const email = account.user?.email;
+      if (!sb || !email) return { ok: false, message: "Sign in first." };
+      if (!navigator.onLine) return { ok: false, message: "You're offline. Changing your password needs a connection." };
+      // Confirm the current password before changing it.
+      const check = await sb.auth.signInWithPassword({ email, password: current });
+      if (check.error) return { ok: false, message: "Your current password isn't right." };
+      const { error } = await sb.auth.updateUser({ password: next });
+      if (error) {
+        const m = error.message.toLowerCase();
+        return { ok: false, message: m.includes("different") || m.includes("same") ? "Pick a password you haven't used here before." : m.includes("password") ? error.message : "Couldn't change it. Try again." };
+      }
+      return { ok: true, message: "Password changed. Other devices stay signed in until their session refreshes." };
+    },
+    [account.user?.email],
+  );
+
   const value: AppState = {
     ready,
     online,
@@ -586,6 +795,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     profile,
     overrides,
     calc,
+    adapt,
+    tdee,
+    weights,
+    meals,
+    recipes,
+    name,
+    dataVersion,
     myFoods,
     pending,
     sheet,
@@ -608,6 +824,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repeatItems,
     reloadAll,
     dismissToast,
+    showToast,
+    openReview,
+    logWeight,
+    deleteWeight,
+    saveMeal,
+    deleteMeal,
+    logSavedMeal,
+    saveRecipe,
+    deleteRecipe,
+    estimateItems,
+    lookupBarcode,
+    setName,
+    changePassword,
     account,
     sync,
     syncNow: runSync,

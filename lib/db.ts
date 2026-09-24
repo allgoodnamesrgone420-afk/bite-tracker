@@ -11,21 +11,29 @@ import {
   type TargetOverrides,
 } from "./schemas";
 import type { PersonalFood } from "./calibration";
-import { diffDay, diffFoods, type FoodChange, type ItemChange } from "./sync-core";
-import type { CoachResult } from "./schemas";
+import { sumMicros } from "./micros";
+import { RECORD_KINDS, diffDay, diffFoods, diffRecords, recordId, type FoodChange, type ItemChange, type RecordChange, type RecordKind } from "./sync-core";
+import type { CoachResult, Micros } from "./schemas";
 import type { Targets } from "./targets";
 import { sumItems, type Nutrients } from "./totals";
 
 /**
  * All user data lives in IndexedDB on this device. Keys:
- *   profile, overrides, passcode, summaries, parseCache, myFoods,
- *   day:YYYY-MM-DD, coach:YYYY-MM-DD:mode,
- *   outbox:items, outbox:foods, outbox:profile, sync:cursor, sync:owner
+ *   profile, overrides, passcode, name, summaries, parseCache, myFoods,
+ *   day:YYYY-MM-DD, coach:YYYY-MM-DD:mode, rec:<kind> (weight, meal, recipe, memory, chat),
+ *   outbox:items, outbox:foods, outbox:records, outbox:profile, sync:cursor, sync:owner
  */
 const store = createStore("bite-db", "kv");
 
 /** One compact row per logged day. `target` is a snapshot so old days are judged by the targets you had then. */
-export type DaySummary = Nutrients & { date: string; count: number; target?: Targets };
+export type DaySummary = Nutrients & {
+  date: string;
+  count: number;
+  target?: Targets;
+  /** Micros summed over the items that have them (`microCovered` of `count`). */
+  micros?: Micros;
+  microCovered?: number;
+};
 
 /* ------------------------------ sync outbox ------------------------------ */
 // Every local write records what changed; the sync engine pushes it. Writes
@@ -50,6 +58,11 @@ async function queueFoods(changes: Record<string, FoodChange>) {
   await update<Record<string, FoodChange>>("outbox:foods", (o) => ({ ...(o ?? {}), ...changes }), store);
   changed();
 }
+async function queueRecords(changes: Record<string, RecordChange>) {
+  if (!Object.keys(changes).length) return;
+  await update<Record<string, RecordChange>>("outbox:records", (o) => ({ ...(o ?? {}), ...changes }), store);
+  changed();
+}
 async function queueProfile() {
   await update<number>("outbox:profile", (n) => (n ?? 0) + 1, store);
   changed();
@@ -58,8 +71,12 @@ async function queueProfile() {
 export const getOutbox = async () => ({
   items: (await get<Record<string, ItemChange>>("outbox:items", store)) ?? {},
   foods: (await get<Record<string, FoodChange>>("outbox:foods", store)) ?? {},
+  records: (await get<Record<string, RecordChange>>("outbox:records", store)) ?? {},
   profile: (await get<number>("outbox:profile", store)) ?? 0,
 });
+
+export const outboxSize = (o: Awaited<ReturnType<typeof getOutbox>>) =>
+  Object.keys(o.items).length + Object.keys(o.foods).length + Object.keys(o.records).length + o.profile;
 
 /** Drop pushed entries, but only if they weren't changed again meanwhile. */
 export async function ackOutbox(pushed: Awaited<ReturnType<typeof getOutbox>>) {
@@ -72,6 +89,11 @@ export async function ackOutbox(pushed: Awaited<ReturnType<typeof getOutbox>>) {
   await update<Record<string, FoodChange>>(
     "outbox:foods",
     (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([k, c]) => !(k in pushed.foods && same(pushed.foods[k], c)))),
+    store,
+  );
+  await update<Record<string, RecordChange>>(
+    "outbox:records",
+    (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([k, c]) => !(k in pushed.records && same(pushed.records[k], c)))),
     store,
   );
   await update<number>("outbox:profile", (n) => ((n ?? 0) === pushed.profile ? 0 : (n ?? 0)), store);
@@ -88,6 +110,9 @@ export async function queueAllLocal() {
   }
   await queueItems(items);
   await queueFoods(await getMyFoods());
+  const recs: Record<string, RecordChange> = {};
+  for (const kind of RECORD_KINDS) for (const [k, v] of Object.entries(await getRecords(kind))) recs[recordId(kind, k)] = v;
+  await queueRecords(recs);
   if (await getProfile()) await queueProfile();
 }
 
@@ -114,6 +139,9 @@ export async function saveOverrides(o: TargetOverrides, opts: WriteOpts = {}) {
   if (!opts.fromSync) await queueProfile();
 }
 export const getPasscode = () => get<string>("passcode", store);
+/** Display name in local-only mode (with accounts it lives on the account). */
+export const getLocalName = () => get<string>("name", store);
+export const saveLocalName = (n: string) => (n ? set("name", n, store) : del("name", store));
 export const savePasscode = (p: string) => (p ? set("passcode", p, store) : del("passcode", store));
 
 export async function getDay(date: string): Promise<DayLog> {
@@ -131,9 +159,7 @@ export async function getDays(dates: string[]): Promise<DayLog[]> {
 export async function saveDay(day: DayLog, target?: Targets, opts: WriteOpts = {}): Promise<Record<string, DaySummary>> {
   if (!opts.fromSync) await queueItems(diffDay(await get<DayLog>(`day:${day.date}`, store), day));
   const summaries = await getSummaries();
-  if (day.items.length) {
-    summaries[day.date] = { date: day.date, count: day.items.length, ...sumItems(day.items), target: target ?? summaries[day.date]?.target };
-  }
+  if (day.items.length) summaries[day.date] = summarise(day, target ?? summaries[day.date]?.target);
   else delete summaries[day.date];
   await setMany(
     [
@@ -143,6 +169,21 @@ export async function saveDay(day: DayLog, target?: Targets, opts: WriteOpts = {
     store,
   );
   return summaries;
+}
+
+function summarise(day: DayLog, target?: Targets): DaySummary {
+  const m = sumMicros(day.items);
+  return { date: day.date, count: day.items.length, ...sumItems(day.items), target, micros: m.covered ? m.total : undefined, microCovered: m.covered };
+}
+
+/* --------------------------- records --------------------------- */
+
+export async function getRecords<T = unknown>(kind: RecordKind): Promise<Record<string, T>> {
+  return (await get<Record<string, T>>(`rec:${kind}`, store)) ?? {};
+}
+export async function saveRecords<T>(kind: RecordKind, next: Record<string, T>, opts: WriteOpts = {}) {
+  if (!opts.fromSync) await queueRecords(diffRecords(kind, await getRecords(kind), next as Record<string, unknown>));
+  await set(`rec:${kind}`, next, store);
 }
 
 /* --------------------------- personal foods --------------------------- */
@@ -196,6 +237,7 @@ const BackupSchema = z.object({
   overrides: TargetOverridesSchema,
   days: z.array(DayLogSchema),
   myFoods: z.record(z.string(), z.any()).optional(),
+  records: z.record(z.string(), z.record(z.string(), z.any())).optional(),
 });
 export type Backup = z.infer<typeof BackupSchema>;
 
@@ -214,6 +256,7 @@ export async function exportAll(): Promise<Backup> {
     overrides: await getOverrides(),
     days,
     myFoods: await getMyFoods(),
+    records: Object.fromEntries(await Promise.all(RECORD_KINDS.map(async (k) => [k, await getRecords(k)] as const))),
   };
 }
 
@@ -224,7 +267,7 @@ export async function importAll(raw: unknown): Promise<{ days: number }> {
   await clear(store);
   const summaries: Record<string, DaySummary> = {};
   for (const d of backup.days) {
-    if (d.items.length) summaries[d.date] = { date: d.date, count: d.items.length, ...sumItems(d.items) };
+    if (d.items.length) summaries[d.date] = summarise(d);
   }
   const writes: [IDBValidKey, unknown][] = [
     ["overrides", backup.overrides],
@@ -233,6 +276,9 @@ export async function importAll(raw: unknown): Promise<{ days: number }> {
   ];
   if (backup.profile) writes.push(["profile", backup.profile]);
   if (backup.myFoods) writes.push(["myFoods", backup.myFoods]);
+  for (const [kind, recs] of Object.entries(backup.records ?? {})) {
+    if ((RECORD_KINDS as readonly string[]).includes(kind)) writes.push([`rec:${kind}`, recs]);
+  }
   if (passcode) writes.push(["passcode", passcode]);
   const meta = await getSyncMeta();
   if (meta.owner) writes.push(["sync:owner", meta.owner]);

@@ -9,8 +9,8 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          // Camera is only used via the file picker's capture; no other device APIs.
-          { key: "Permissions-Policy", value: "camera=(self), microphone=(), geolocation=()" },
+          // Camera: photo logging and barcode scanning. Microphone: voice logging. Nothing else.
+          { key: "Permissions-Policy", value: "camera=(self), microphone=(self), geolocation=()" },
         ],
       },
       {

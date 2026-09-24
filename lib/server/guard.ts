@@ -14,6 +14,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   refused: 422,
   config: 500,
   offline: 503,
+  not_found: 404,
 };
 
 export function errorResponse(code: ApiErrorCode, message: string) {
@@ -37,7 +38,19 @@ export function checkPasscode(req: Request): boolean {
 }
 
 /* ------------------------ rate limiting ---------------------------- */
-// In-memory token bucket per IP + route. Resets on cold start; fine for a personal app.
+// With accounts, limits live in Postgres (take_token in supabase/schema.sql) so
+// they hold across serverless instances. This in-memory bucket is the
+// local-only-mode limiter and the fallback if the database can't be reached.
+
+export const LIMITS = {
+  parse: { perMinute: 20, perDay: 300 },
+  vision: { perMinute: 8, perDay: 40 },
+  coach: { perMinute: 6, perDay: 30 },
+  chat: { perMinute: 10, perDay: 120 },
+  barcode: { perMinute: 20, perDay: 200 },
+  status: { perMinute: 30, perDay: 1000 },
+} as const;
+export type Route = keyof typeof LIMITS;
 
 type Bucket = { tokens: number; updated: number };
 const buckets = new Map<string, Bucket>();
@@ -91,17 +104,20 @@ export const accountsEnabled = Boolean(SB_URL && SB_KEY);
 const verified = new Map<string, { userId: string; until: number }>();
 const TOKEN_CACHE_MS = 60_000;
 
-async function verifyUser(req: Request): Promise<{ userId: string } | { error: Response }> {
+const userClient = (token: string) =>
+  createClient(SB_URL!, SB_KEY!, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+async function verifyUser(req: Request): Promise<{ userId: string; token: string } | { error: Response }> {
   const token = req.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1];
   if (!token) return { error: errorResponse("unauthorized", "Sign in to use AI features.") };
   const key = createHash("sha256").update(token).digest("hex");
   const hit = verified.get(key);
-  if (hit && hit.until > Date.now()) return { userId: hit.userId };
+  if (hit && hit.until > Date.now()) return { userId: hit.userId, token };
 
-  const sb = createClient(SB_URL!, SB_KEY!, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const sb = userClient(token);
   const { data, error } = await sb.auth.getUser(token);
   if (error || !data.user?.email) return { error: errorResponse("unauthorized", "Your session expired. Sign in again.") };
   // RLS lets a user read only their own invite row.
@@ -110,20 +126,35 @@ async function verifyUser(req: Request): Promise<{ userId: string } | { error: R
 
   if (verified.size > 1_000) verified.clear();
   verified.set(key, { userId: data.user.id, until: Date.now() + TOKEN_CACHE_MS });
-  return { userId: data.user.id };
+  return { userId: data.user.id, token };
 }
 
-/** Common preamble for every LLM route. Returns an error Response, or null to continue. */
-export async function guard(req: Request, route: string, perMinute: number): Promise<Response | null> {
-  let who = clientIp(req);
+let warnedFallback = false;
+
+/** "ok", or which limit was hit. Falls back to the in-memory bucket if the database call fails. */
+async function takeToken(token: string, who: string, route: Route): Promise<"ok" | "minute" | "day"> {
+  const { perMinute, perDay } = LIMITS[route];
+  const { data, error } = await userClient(token).rpc("take_token", { p_route: route, p_per_minute: perMinute, p_per_day: perDay });
+  if (!error && (data === "ok" || data === "minute" || data === "day")) return data;
+  if (!warnedFallback) {
+    console.error(`[guard] take_token unavailable (${error?.message ?? String(data)}); using in-memory limits`);
+    warnedFallback = true;
+  }
+  return rateLimit(`${route}:${who}`, perMinute) ? "ok" : "minute";
+}
+
+/** Common preamble for every AI route. Returns an error Response, or null to continue. */
+export async function guard(req: Request, route: Route): Promise<Response | null> {
   if (accountsEnabled) {
     const v = await verifyUser(req);
     if ("error" in v) return v.error;
-    who = v.userId;
-  } else if (!checkPasscode(req)) {
-    return errorResponse("unauthorized", "Passcode required.");
+    const t = await takeToken(v.token, v.userId, route);
+    if (t === "day") return errorResponse("rate_limited", "You've hit today's limit for this AI feature. It resets at 05:30 IST (midnight UTC).");
+    if (t === "minute") return errorResponse("rate_limited", "Too many requests. Give it a few seconds.");
+    return null;
   }
-  if (!rateLimit(`${route}:${who}`, perMinute)) {
+  if (!checkPasscode(req)) return errorResponse("unauthorized", "Passcode required.");
+  if (!rateLimit(`${route}:${clientIp(req)}`, LIMITS[route].perMinute)) {
     return errorResponse("rate_limited", "Too many requests. Give it a few seconds.");
   }
   return null;

@@ -8,6 +8,7 @@
 import { FOODS, type Food } from "./food-db";
 import type { Meal, ParsedItem } from "./schemas";
 import { mealForTime } from "./totals";
+import { microsFor } from "./micros";
 import { KNOWN_UNITS, normalizeUnit, unitToGrams } from "./units";
 
 export type LocalParse = {
@@ -42,7 +43,7 @@ const STOP = new Set(
     "my me mein mai main maine liya liye li le lena khaya khayi khaye khana piya pi pee piye ki ka ke ko se hai tha thi the " +
     "of the for at in on around about approx approximately roughly with and plus extra homemade home made cooked fresh hot cold warm " +
     "plain bhi or like x after before gym pre post time am pm o'clock oclock serving servings portion size " +
-    "wala wali wale mix mixed style bowlful glassful cupful total each per only also some"
+    "wala wali wale mix mixed style bowlful glassful cupful total each per only also some sweet spicy salted unsalted crispy"
   ).split(" "),
 );
 
@@ -113,7 +114,7 @@ function normalise(text: string): string {
       .replace(/\ba\s+half\b/g, " 0.5 ")
       // glue "200g" / "2scoops" apart
       .replace(/(\d)([a-z])/g, "$1 $2")
-      .replace(/'/g, "")
+      .replace(/['’]/g, "")
       .replace(/[&]/g, " and ")
       .replace(/[;\n|]/g, ",")
       .replace(/[^\w\s.,'+]/g, " ")
@@ -269,6 +270,7 @@ export function localParse(
         carbs_g: r1(food.n[2]),
         fat_g: r1(food.n[3]),
         fibre_g: r1(food.n[4]),
+        micros: microsFor(food.m, base),
         confidence: span.personal === "verified" || verifiedSet.has(food) ? "high" : itemVague ? "low" : assumed || approx ? "medium" : "high",
         assumed: assumed || itemVague,
         notes:

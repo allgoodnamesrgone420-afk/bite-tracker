@@ -1,4 +1,5 @@
 /** Pure progress-tracking logic: day status vs targets, macro flags, calendar and streaks. */
+import type { Micros } from "./schemas";
 import type { Targets } from "./targets";
 import { addDays, dateKey, type Nutrients } from "./totals";
 
@@ -51,7 +52,7 @@ export function monthGrid(year: number, month: number): (string | null)[][] {
   return weeks;
 }
 
-export type DayRow = Nutrients & { date: string; count: number; target?: Targets };
+export type DayRow = Nutrients & { date: string; count: number; target?: Targets; micros?: Micros; microCovered?: number };
 
 /** Consecutive on-target days, ending today (or yesterday if today isn't on target yet). */
 export function targetStreak(rows: Record<string, DayRow>, today: string, fallback: Targets): number {

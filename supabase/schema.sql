@@ -80,10 +80,23 @@ create table if not exists public.my_foods (
 );
 create index if not exists my_foods_user_updated on public.my_foods (user_id, updated_at);
 
+-- Small keyed records: weigh-ins (key = date), saved meals, recipes, the
+-- coach's memory and chat history. Size-capped so one row can't grow unbounded.
+create table if not exists public.records (
+  user_id uuid not null default auth.uid() references auth.users on delete cascade,
+  kind text not null check (kind in ('weight', 'meal', 'recipe', 'memory', 'chat')),
+  key text not null check (length(key) between 1 and 100),
+  data jsonb check (data is null or pg_column_size(data) <= 65536),
+  deleted boolean not null default false,
+  updated_at timestamptz not null default clock_timestamp(),
+  primary key (user_id, kind, key)
+);
+create index if not exists records_user_updated on public.records (user_id, updated_at);
+
 do $$
 declare t text;
 begin
-  foreach t in array array['profiles', 'log_items', 'my_foods'] loop
+  foreach t in array array['profiles', 'log_items', 'my_foods', 'records'] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop trigger if exists touch on public.%I', t);
     execute format('create trigger touch before insert or update on public.%I for each row execute function public.touch_updated_at()', t);
@@ -94,3 +107,49 @@ begin
     );
   end loop;
 end $$;
+
+
+-- ---------------------------------------------------------------- AI rate limits
+-- Token bucket per user and route (refills per minute) plus a daily cap, so
+-- limits hold across every serverless instance. Only reachable through
+-- take_token(), which always acts on the caller's own row.
+create table if not exists public.rate_limits (
+  user_id uuid not null references auth.users on delete cascade,
+  route text not null,
+  tokens double precision not null,
+  refilled_at timestamptz not null,
+  day date not null,
+  day_count integer not null default 0,
+  primary key (user_id, route)
+);
+alter table public.rate_limits enable row level security; -- no policies: direct access denied
+
+create or replace function public.take_token(p_route text, p_per_minute integer, p_per_day integer)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  now_ts timestamptz := clock_timestamp();
+  today date := (now_ts at time zone 'utc')::date;
+  r public.rate_limits%rowtype;
+begin
+  if uid is null or not public.is_invited() then return 'denied'; end if;
+  if p_per_minute < 1 or p_per_day < 1 or length(p_route) > 40 then return 'denied'; end if;
+
+  insert into public.rate_limits as rl (user_id, route, tokens, refilled_at, day, day_count)
+  values (uid, p_route, p_per_minute, now_ts, today, 0)
+  on conflict (user_id, route) do update set
+    tokens = least(p_per_minute, rl.tokens + extract(epoch from (now_ts - rl.refilled_at)) / 60.0 * p_per_minute),
+    refilled_at = now_ts,
+    day = today,
+    day_count = case when rl.day = today then rl.day_count else 0 end
+  returning * into r;
+
+  if r.day_count >= p_per_day then return 'day'; end if;
+  if r.tokens < 1 then return 'minute'; end if;
+  update public.rate_limits set tokens = tokens - 1, day_count = day_count + 1 where user_id = uid and route = p_route;
+  return 'ok';
+end $$;
+
+revoke all on function public.take_token(text, integer, integer) from public, anon;
+grant execute on function public.take_token(text, integer, integer) to authenticated;

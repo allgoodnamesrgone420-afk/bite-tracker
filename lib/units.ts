@@ -20,6 +20,7 @@ const UNIT_ALIASES: Record<string, string> = {
   packet: "packet", packets: "packet", pack: "packet", packs: "packet", sachet: "packet",
   bar: "bar", bars: "bar",
   can: "can", cans: "can", bottle: "bottle", bottles: "bottle", pint: "pint",
+  peg: "peg", pegs: "peg", shot: "peg", shots: "peg",
   mug: "cup", mugs: "cup",
 };
 
@@ -44,6 +45,7 @@ export const VOLUME_ML: Record<string, number> = {
   can: 330,
   bottle: 330,
   pint: 473,
+  peg: 30,
 };
 
 /** Grams-equivalent of a unit for a food with the given density (g/ml). */

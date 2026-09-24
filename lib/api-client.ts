@@ -1,7 +1,7 @@
 "use client";
 import { getPasscode } from "./db";
 import { accessToken } from "./supabase";
-import type { ApiResponse, CoachRequest, CoachResult, ParseRequest, ParseResponse, PhotoParseRequest } from "./schemas";
+import type { ApiResponse, BarcodeResult, ChatReply, ChatRequest, CoachRequest, CoachResult, Meal, ParseRequest, ParseResponse, PhotoParseRequest } from "./schemas";
 
 const CLIENT_TIMEOUT_MS = 45_000; // server caps each LLM call at 20s; allow for the repair retry
 
@@ -50,3 +50,5 @@ export async function apiAIStatus(): Promise<AIStatus | null> {
 export const apiParse = (req: ParseRequest) => post<ParseResponse>("/api/parse", req);
 export const apiParsePhoto = (req: PhotoParseRequest) => post<ParseResponse>("/api/parse-photo", req);
 export const apiCoach = (req: CoachRequest) => post<CoachResult>("/api/coach", req);
+export const apiChat = (req: ChatRequest) => post<ChatReply>("/api/chat", req);
+export const apiBarcode = (code: string, meal: Meal) => post<BarcodeResult>("/api/barcode", { code, meal });

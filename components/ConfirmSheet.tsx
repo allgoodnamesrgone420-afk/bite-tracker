@@ -1,10 +1,14 @@
 "use client";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { MEALS, type Meal } from "@/lib/schemas";
-import { sumItems } from "@/lib/totals";
-import { nutrientsOf } from "@/lib/calibration";
-import type { LogItem } from "@/lib/schemas";
+import Link from "next/link";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { foodKey, nutrientsOf } from "@/lib/calibration";
+import { perServing } from "@/lib/library";
+import { scaleMicros } from "@/lib/micros";
+import { MEALS, ParsedItemSchema, type ApiErrorCode, type LogItem, type Meal, type ParsedItem } from "@/lib/schemas";
+import { MEAL_STYLE } from "@/lib/meal-style";
+import { mealForTime, sumItems } from "@/lib/totals";
 import { blankRow, useApp, type DraftItem, type Engine, type Sheet } from "./AppProvider";
+import { BarcodeScanner } from "./BarcodeScanner";
 import { ConfidenceDot, Icon, PopButton, fmtG, fmtInt } from "./ui";
 
 export function ConfirmSheet() {
@@ -45,7 +49,7 @@ export function ConfirmSheet() {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
+    <div className="fixed inset-0 z-50 flex items-end justify-center lg:items-center lg:p-6">
       <div className="backdrop absolute inset-0 bg-black/70" onClick={() => setSheet({ kind: "closed" })} aria-hidden="true" />
       <div
         ref={panelRef}
@@ -53,7 +57,7 @@ export function ConfirmSheet() {
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="sheet relative flex max-h-[88dvh] w-full max-w-[430px] flex-col border-t-4 border-lime bg-surface focus:outline-none"
+        className="sheet relative flex max-h-[88dvh] w-full max-w-[430px] flex-col border-t-4 border-lime bg-surface focus:outline-none lg:max-h-[85dvh] lg:max-w-[600px] lg:border-4 lg:shadow-[8px_8px_0_#000]"
       >
         <button
           onClick={() => setSheet({ kind: "closed" })}
@@ -83,6 +87,12 @@ function SheetBody({ sheet, titleId }: { sheet: Exclude<Sheet, { kind: "closed" 
       return <Passcode sheet={sheet} titleId={titleId} />;
     case "edit":
       return <Edit key={sheet.item.id} item={sheet.item} titleId={titleId} />;
+    case "add":
+      return <AddMenu text={sheet.text} titleId={titleId} />;
+    case "barcode":
+      return <BarcodeSheet titleId={titleId} />;
+    case "saveMeal":
+      return <SaveMeal sheet={sheet} titleId={titleId} />;
   }
 }
 
@@ -100,8 +110,12 @@ function Header({ label, title, titleId, children }: { label: string; title: Rea
 
 /* ------------------------------ review ------------------------------- */
 
+/** Strip draft-only fields, keep what a saved meal needs. */
+const toParsed = (rows: DraftItem[]): ParsedItem[] =>
+  rows.filter((r) => r.name.trim()).map((r) => ParsedItemSchema.parse({ ...r, name: r.name.trim(), unit: r.unit.trim() || "serving" }));
+
 function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>; titleId: string }) {
-  const { commitRows } = useApp();
+  const { commitRows, setSheet } = useApp();
   const [rows, setRows] = useState<DraftItem[]>(sheet.rows);
   const [saving, setSaving] = useState(false);
   const valid = rows.filter((r) => r.name.trim());
@@ -138,8 +152,18 @@ function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>;
         </button>
       </div>
       <div className="border-t border-line px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-3">
-        <div className="mb-3 flex items-baseline justify-between">
-          <span className="label">Total</span>
+        <div className="mb-3 flex items-baseline justify-between gap-2">
+          <span className="flex items-baseline gap-3">
+            <span className="label">Total</span>
+            {valid.length > 0 && valid.every((r) => r.calories > 0) && (
+              <button
+                className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2 underline decoration-lime decoration-2 underline-offset-4 hover:text-ink"
+                onClick={() => setSheet({ kind: "saveMeal", items: toParsed(valid), name: sheet.text.length <= 30 ? sheet.text : "", then: { ...sheet, rows } })}
+              >
+                Save as meal
+              </button>
+            )}
+          </span>
           <span className="num text-sm text-ink-2">
             <strong className="text-lg text-ink">{fmtInt(totals.calories)}</strong> kcal · P {fmtG(totals.protein_g)} · C {fmtG(totals.carbs_g)} · F {fmtG(totals.fat_g)}
           </span>
@@ -164,6 +188,7 @@ const ENGINE_TAG: Record<Engine, { text: string; cls: string } | null> = {
   local: { text: "Instant · food library", cls: "face-lime" },
   cache: { text: "From your history · no AI call", cls: "face-lime" },
   llm: { text: "AI estimate", cls: "face-violet" },
+  barcode: { text: "Label values · Open Food Facts", cls: "face-lime" },
   manual: null,
 };
 
@@ -187,7 +212,7 @@ function EngineTag({ engine, photo }: { engine: Engine; photo?: boolean }) {
   );
 }
 
-function DraftRow({ row, onChange, onRemove }: { row: DraftItem; onChange: (p: Partial<DraftItem>) => void; onRemove: () => void }) {
+export function DraftRow({ row, onChange, onRemove }: { row: DraftItem; onChange: (p: Partial<DraftItem>) => void; onRemove: () => void }) {
   // Changing quantity scales nutrients proportionally (keeps per-unit values).
   const setQuantity = (q: number) => {
     if (row.quantity > 0 && q > 0) {
@@ -200,6 +225,7 @@ function DraftRow({ row, onChange, onRemove }: { row: DraftItem; onChange: (p: P
         carbs_g: r1(row.carbs_g),
         fat_g: r1(row.fat_g),
         fibre_g: r1(row.fibre_g),
+        micros: scaleMicros(row.micros, k),
       });
     } else onChange({ quantity: q });
   };
@@ -480,6 +506,196 @@ function Passcode({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "passcode"
         <button type="submit" className="pop-btn" disabled={!code}>
           Unlock
         </button>
+      </form>
+    </>
+  );
+}
+
+/* ------------------------------ add menu ------------------------------ */
+
+function AddMenu({ text, titleId }: { text: string; titleId: string }) {
+  const { openManual, setSheet, meals, recipes, logSavedMeal, quickAdd, myFoods, online } = useApp();
+  const saved = Object.values(meals).sort((a, b) => b.uses - a.uses || b.createdAt - a.createdAt);
+  const recipeList = Object.values(recipes).sort((a, b) => b.updatedAt - a.updatedAt);
+  return (
+    <>
+      <Header label="Add food" title="How do you want to add it?" titleId={titleId} />
+      <div className="flex-1 space-y-5 overflow-y-auto px-5 pb-[max(20px,env(safe-area-inset-bottom))]">
+        <div className="grid grid-cols-2 gap-3">
+          <button className="plunk face-card flex flex-col items-start gap-2 p-4 text-left" style={{ ["--d" as string]: "3px" }} onClick={() => openManual(text)}>
+            <Icon.edit size={20} />
+            <span className="font-bold">Type the numbers</span>
+            <span className="text-xs text-ink-2">Manual entry</span>
+          </button>
+          <button
+            className="plunk face-card flex flex-col items-start gap-2 p-4 text-left disabled:opacity-50"
+            style={{ ["--d" as string]: "3px" }}
+            onClick={() => setSheet({ kind: "barcode" })}
+            disabled={!online}
+          >
+            <Icon.barcode size={20} />
+            <span className="font-bold">Scan a barcode</span>
+            <span className="text-xs text-ink-2">{online ? "Packaged food, label values" : "Needs a connection"}</span>
+          </button>
+        </div>
+        <div>
+          <div className="flex items-baseline justify-between">
+            <p className="label">Saved meals</p>
+            <Link href="/foods" className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2 hover:text-ink" onClick={() => setSheet({ kind: "closed" })}>
+              Manage
+            </Link>
+          </div>
+          {saved.length === 0 ? (
+            <p className="mt-2 text-sm text-ink-3">None yet. After logging, tap “Save as meal” on the confirm screen, or on a meal in Today.</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-line-soft border-y border-line-soft">
+              {saved.map((m) => (
+                <li key={m.id}>
+                  <button className="flex w-full items-center gap-3 py-2.5 text-left hover:bg-elevated" onClick={() => logSavedMeal(m.id)}>
+                    <Icon.bookmark size={16} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{m.name}</span>
+                      <span className="block truncate text-xs text-ink-2">{m.items.map((i) => i.name).join(", ")}</span>
+                    </span>
+                    <span className="num text-sm font-bold">{fmtInt(sumItems(m.items).calories)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {recipeList.length > 0 && (
+          <div>
+            <p className="label">Your recipes · 1 serving</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {recipeList.map((r) => {
+                const key = foodKey(r.name);
+                return (
+                  <button key={r.id} className="chip" disabled={!myFoods[key]} onClick={() => quickAdd(key)}>
+                    {r.name} <span className="num font-normal text-ink-3">{perServing(r).n[0]} kcal</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------ barcode ------------------------------ */
+
+function BarcodeSheet({ titleId }: { titleId: string }) {
+  const { lookupBarcode, openManual, submitPhoto } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<{ code: ApiErrorCode; message: string } | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const labelRef = useRef<HTMLInputElement>(null);
+
+  const onCode = useCallback(
+    async (code: string) => {
+      setBusy(true);
+      setErr(null);
+      const r = await lookupBarcode(code);
+      setBusy(false);
+      if (!r.ok) setErr({ code: r.code, message: r.message });
+    },
+    [lookupBarcode],
+  );
+
+  return (
+    <>
+      <Header label="Barcode" title="Scan a packaged food" titleId={titleId}>
+        <p className="mt-1 text-xs text-ink-3">Looks it up in Open Food Facts, a free product database. Only the barcode number is sent.</p>
+      </Header>
+      <div className="flex-1 space-y-3 overflow-y-auto px-5 pb-[max(20px,env(safe-area-inset-bottom))]">
+        {err ? (
+          <div className="space-y-3">
+            <p className="flex items-start gap-2 border border-warn/60 bg-warn/10 p-3 text-sm" role="alert">
+              <span className="text-warn">
+                <Icon.alert size={16} />
+              </span>
+              {err.message}
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <PopButton variant="lime" onClick={() => labelRef.current?.click()}>
+                <Icon.camera size={16} /> Snap the label
+              </PopButton>
+              <PopButton variant="ghost" onClick={() => (setErr(null), setAttempt((a) => a + 1))}>
+                Scan again
+              </PopButton>
+              <PopButton variant="ghost" onClick={() => openManual("")}>
+                Type it
+              </PopButton>
+            </div>
+            <input
+              ref={labelRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              aria-hidden="true"
+              tabIndex={-1}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) submitPhoto(f, "This is a nutrition label. Use the label's per-serving values for 1 serving.");
+              }}
+            />
+          </div>
+        ) : (
+          <BarcodeScanner key={attempt} onCode={onCode} busy={busy} />
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------ save meal ------------------------------ */
+
+function SaveMeal({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "saveMeal" }>; titleId: string }) {
+  const { saveMeal, setSheet } = useApp();
+  const meal = sheet.items[0]?.meal ?? mealForTime();
+  const [name, setName] = useState(sheet.name || `My ${MEAL_STYLE[meal].label.toLowerCase()}`);
+  const t = sumItems(sheet.items);
+  return (
+    <>
+      <Header label="Save as meal" title="Log all of this in one tap next time" titleId={titleId} />
+      <form
+        className="space-y-4 px-5 pb-[max(20px,env(safe-area-inset-bottom))]"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) void saveMeal(name, sheet.items, sheet.then);
+        }}
+      >
+        <label className="field">
+          <span>Meal name</span>
+          <input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} autoFocus />
+        </label>
+        <ul className="space-y-1 text-sm">
+          {sheet.items.map((i, k) => (
+            <li key={k} className="num flex justify-between gap-2">
+              <span className="truncate text-ink-2">
+                {fmtG(i.quantity)} {i.unit} {i.name}
+              </span>
+              <span className="shrink-0">{fmtInt(i.calories)}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="num text-right text-sm text-ink-2">
+          <strong className="text-ink">{fmtInt(t.calories)}</strong> kcal · P {fmtG(t.protein_g)} · C {fmtG(t.carbs_g)} · F {fmtG(t.fat_g)}
+        </p>
+        <div className="flex gap-3">
+          {sheet.then && (
+            <PopButton variant="ghost" onClick={() => setSheet(sheet.then!)}>
+              Back
+            </PopButton>
+          )}
+          <PopButton type="submit" className="flex-1" disabled={!name.trim()}>
+            <Icon.bookmark size={16} /> Save meal
+          </PopButton>
+        </div>
       </form>
     </>
   );

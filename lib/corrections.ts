@@ -7,6 +7,7 @@
 import { foodKey } from "./calibration";
 import { FOODS, type Food } from "./food-db";
 import { localParse } from "./local-parser";
+import { scaleMicros } from "./micros";
 import type { ParsedItem } from "./schemas";
 
 const ALIASES = [...new Set(FOODS.flatMap((f) => f.aliases))].sort((a, b) => b.length - a.length);
@@ -48,6 +49,7 @@ export function localCorrection(item: ParsedItem, text: string, personal: { veri
     carbs_g: r(item.carbs_g),
     fat_g: r(item.fat_g),
     fibre_g: r(item.fibre_g),
+    micros: scaleMicros(item.micros, k),
     notes: `Corrected: ${text}`.slice(0, 200),
   };
 }

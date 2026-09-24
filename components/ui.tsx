@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type ReactNode, type RefObject } from "react";
 
 type Variant = "primary" | "lime" | "accent" | "yellow" | "ghost" | "danger";
 
@@ -55,6 +55,33 @@ export function useCountUp(target: number, duration = 400): number {
     };
   }, [target, duration]);
   return value;
+}
+
+/** Live media query (false during SSR). */
+export function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const mq = window.matchMedia(query);
+      mq.addEventListener("change", cb);
+      return () => mq.removeEventListener("change", cb);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
+export const useDesktop = () => useMediaQuery("(min-width: 1024px)");
+
+/** Width of an element, kept up to date (for charts that draw in real pixels). */
+export function useElementWidth<T extends HTMLElement>(ref: RefObject<T | null>, fallback = 320): number {
+  const [w, setW] = useState(fallback);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setW(Math.max(120, Math.round(e.contentRect.width))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return w;
 }
 
 export const fmtInt = (n: number) => Math.round(n).toLocaleString("en-IN");
@@ -147,6 +174,46 @@ export const Icon = {
   right: (p: { size?: number }) => (
     <Svg {...p}>
       <path d="M9 5l7 7-7 7" />
+    </Svg>
+  ),
+  mic: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M9 4h6v9H9zM5 11a7 7 0 0014 0M12 18v3" />
+    </Svg>
+  ),
+  barcode: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M4 5v14M7 5v14M11 5v14M14 5v14M17 5v14M20 5v14" />
+    </Svg>
+  ),
+  logout: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M14 4H5v16h9M10 12h11M17 8l4 4-4 4" />
+    </Svg>
+  ),
+  scale: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M4 4h16v16H4zM8 9a4 4 0 018 0M12 9l1.5-2" />
+    </Svg>
+  ),
+  book: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M5 4h11l3 3v13H5zM9 9h6M9 13h6M9 17h3" />
+    </Svg>
+  ),
+  bookmark: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M6 3h12v18l-6-5-6 5z" />
+    </Svg>
+  ),
+  edit: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4" />
+    </Svg>
+  ),
+  stop: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M7 7h10v10H7z" />
     </Svg>
   ),
   wifiOff: (p: { size?: number }) => (

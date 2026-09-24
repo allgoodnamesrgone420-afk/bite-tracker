@@ -4,6 +4,7 @@
  * library and AI estimates from then on.
  */
 import { FOODS, type Food, type N5 } from "./food-db";
+import { microsFor, perUnitMicros, type M5 } from "./micros";
 import type { ParsedItem } from "./schemas";
 import { normalizeUnit, unitToGrams } from "./units";
 
@@ -13,6 +14,8 @@ export type PersonalFood = {
   unit: string;
   /** Nutrients per ONE unit. */
   per: N5;
+  /** Micros per ONE unit, when known. */
+  pm?: M5;
   /** True once you've edited the numbers yourself. */
   verified: boolean;
   /** Your usual portion (in `unit`), for one-tap quick-add. */
@@ -28,6 +31,7 @@ const MAX_FOODS = 500;
 export function foodKey(name: string): string {
   return name
     .toLowerCase()
+    .replace(/['’]/g, "")
     .replace(/\(.*?\)/g, " ")
     .replace(/[^a-z0-9 ]/g, " ")
     .replace(/\s+/g, " ")
@@ -77,11 +81,14 @@ export function learnFoods(
     const keepPrev = prev?.verified && !edited;
     const unit = keepPrev ? prev.unit : normalizeUnit(r.unit) || "serving";
     const qtyInUnit = convertQty(r.quantity, r.unit, unit);
+    const pm = perUnitMicros(r.micros, r.quantity);
     next[key] = {
       key,
       name: prev && keepPrev ? prev.name : r.name.trim(),
       unit,
       per: keepPrev ? prev.per : per,
+      // Micros aren't hand-edited, so keep any known values rather than dropping them.
+      pm: keepPrev ? (prev.pm ?? pm) : (pm ?? prev?.pm),
       lastQty: qtyInUnit !== null ? Math.round(qtyInUnit * 100) / 100 : prev?.lastQty,
       verified: edited || !!prev?.verified,
       uses: (prev?.uses ?? 0) + 1,
@@ -113,6 +120,7 @@ export function applyCalibration(items: ParsedItem[], foods: Record<string, Pers
       carbs_g: r(p.per[2]),
       fat_g: r(p.per[3]),
       fibre_g: r(p.per[4]),
+      micros: microsFor(p.pm, units) ?? item.micros,
       confidence: "high",
       notes: "Your saved values",
     };
@@ -124,8 +132,8 @@ export function personalAsFoods(foods: Record<string, PersonalFood>): { verified
   const toFood = (p: PersonalFood): Food => {
     // A calibrated library food keeps its aliases ("whey", "protein powder"...) and unit conversions.
     const builtin = FOODS.find((f) => foodKey(f.name) === p.key);
-    if (builtin && builtin.unit === p.unit) return { ...builtin, name: p.name, n: p.per, def: undefined, vague: false };
-    return { name: p.name, aliases: [p.key, ...(builtin?.aliases ?? [])], unit: p.unit, grams: unitToGrams(p.unit) ?? 0, n: p.per };
+    if (builtin && builtin.unit === p.unit) return { ...builtin, name: p.name, n: p.per, m: p.pm ?? builtin.m, def: undefined, vague: false };
+    return { name: p.name, aliases: [p.key, ...(builtin?.aliases ?? [])], unit: p.unit, grams: unitToGrams(p.unit) ?? 0, n: p.per, m: p.pm };
   };
   const all = Object.values(foods);
   return { verified: all.filter((p) => p.verified).map(toFood), learned: all.filter((p) => !p.verified).map(toFood) };
@@ -145,6 +153,7 @@ export function itemFromPersonal(p: PersonalFood, meal: ParsedItem["meal"]): Par
     carbs_g: r(p.per[2]),
     fat_g: r(p.per[3]),
     fibre_g: r(p.per[4]),
+    micros: microsFor(p.pm, q),
     confidence: p.verified ? "high" : "medium",
     assumed: false,
     notes: p.verified ? "Your saved values" : "Your usual portion",

@@ -29,6 +29,8 @@ export const ProfileSchema = z.object({
   rateKgPerWeek: z.number().min(0).max(1.5),
   diet: z.string().max(300).default(""),
   healthNotes: z.string().max(300).default(""),
+  /** Use maintenance estimated from your own logs + weigh-ins once there's enough data (default on). */
+  adaptive: z.boolean().optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
@@ -49,6 +51,16 @@ export type TargetOverrides = z.infer<typeof TargetOverridesSchema>;
 
 const grams = z.number().min(0).max(1000);
 
+/** Micronutrients for the whole quantity. Optional: items logged before micros existed don't have them. */
+export const MicrosSchema = z.object({
+  sodium_mg: z.number().min(0).max(20000),
+  sugar_g: grams,
+  satfat_g: grams,
+  calcium_mg: z.number().min(0).max(10000),
+  iron_mg: z.number().min(0).max(200),
+});
+export type Micros = z.infer<typeof MicrosSchema>;
+
 export const ParsedItemSchema = z.object({
   name: z.string().min(1).max(80),
   quantity: z.number().min(0).max(5000),
@@ -62,6 +74,7 @@ export const ParsedItemSchema = z.object({
   confidence: Confidence,
   assumed: z.boolean(),
   notes: z.string().max(200),
+  micros: MicrosSchema.optional(),
 });
 export type ParsedItem = z.infer<typeof ParsedItemSchema>;
 
@@ -124,6 +137,7 @@ export const API_ERROR_CODES = [
   "refused",
   "config",
   "offline",
+  "not_found",
 ] as const;
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 
@@ -190,6 +204,8 @@ export const CoachRequestSchema = z.object({
   days: z.array(NutrientsSchema.extend({ date: z.string(), items: z.number() })).max(14),
   /** Code-computed patterns, so the model doesn't have to do arithmetic. */
   insights: z.array(z.string().max(300)).max(12),
+  /** What the chat coach has learned about you (preferences, dislikes...). */
+  memory: z.array(z.string().max(160)).max(30).optional(),
 });
 export type CoachRequest = z.infer<typeof CoachRequestSchema>;
 
@@ -229,3 +245,47 @@ export const PhotoParseRequestSchema = z.object({
   diet: z.string().max(300).optional(),
 });
 export type PhotoParseRequest = z.infer<typeof PhotoParseRequestSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Coach chat                                                          */
+/* ------------------------------------------------------------------ */
+
+export const CHAT_MAX_CHARS = 1000;
+export const CHAT_HISTORY = 10;
+export const MEMORY_MAX = 30;
+
+export const ChatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().trim().min(1).max(2000),
+});
+export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+export type LLMMessageLike = { role: "user" | "assistant"; content: string };
+
+export const ChatRequestSchema = z.object({
+  /** Recent turns only (oldest first); the last one is the user's new message. */
+  messages: z
+    .array(ChatMessageSchema)
+    .min(1)
+    .max(CHAT_HISTORY + 1)
+    .refine((m) => m[m.length - 1].role === "user" && m[m.length - 1].content.length <= CHAT_MAX_CHARS, "Last message must be yours, under 1000 characters"),
+  /** Compact digest of your logs, computed on the device. */
+  context: z.string().max(6000),
+  memory: z.array(z.string().max(160)).max(MEMORY_MAX),
+});
+export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+export const ChatReplySchema = z.object({
+  reply: z.string().min(1).max(2000),
+  follow_ups: z.array(z.string().max(60)).max(3),
+  memory_add: z.array(z.string().max(160)).max(5),
+  memory_remove: z.array(z.string().max(160)).max(5),
+  safety_flag: z.boolean(),
+});
+export type ChatReply = z.infer<typeof ChatReplySchema>;
+
+/* ------------------------------------------------------------------ */
+/* Barcode                                                             */
+/* ------------------------------------------------------------------ */
+
+export const BarcodeSchema = z.string().regex(/^\d{8,14}$/, "Barcodes are 8-14 digits");
+export type BarcodeResult = { code: string; item: ParsedItem; source: "openfoodfacts" };

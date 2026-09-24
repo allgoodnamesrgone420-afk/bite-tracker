@@ -1,16 +1,19 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useApp } from "@/components/AppProvider";
+import { BarList, Donut } from "@/components/charts";
+import { MicrosCard } from "@/components/MicrosCard";
 import { ConfidenceDot, Icon, fmtG, fmtInt, useCountUp } from "@/components/ui";
 import { MEAL_STYLE } from "@/lib/meal-style";
 import * as db from "@/lib/db";
-import { MEALS, type DayLog, type LogItem, type Meal } from "@/lib/schemas";
+import { STATUS_META, classifyDay, lastNDates } from "@/lib/progress";
+import { MEALS, ParsedItemSchema, type DayLog, type LogItem, type Meal } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
 import { addDays, byMeal, macroSplit, mealForTime, remaining, streak, sumItems } from "@/lib/totals";
 
 export default function TodayPage() {
-  const { ready, day, today, summaries, calc, pending } = useApp();
+  const { ready, day, today, summaries, calc, pending, profile } = useApp();
   const [yesterday, setYesterday] = useState<DayLog | null>(null);
   useEffect(() => {
     let live = true;
@@ -25,58 +28,235 @@ export default function TodayPage() {
   const targets = calc?.targets ?? null;
   const days = streak(Object.keys(summaries), today);
   const groups = byMeal(day.items);
-  const dateLabel = new Date(`${today}T00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  const dateObj = new Date(`${today}T00:00`);
+  const dateShort = dateObj.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+  const dateLong = dateObj.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
+
+  const meals = (
+    <section aria-label="Meals" className="space-y-3">
+      {day.items.length === 0 && !pending && (
+        <div className="card p-5 text-center" style={{ ["--i" as string]: 4 }}>
+          <p className="font-semibold">Nothing logged yet.</p>
+          <p className="mt-1 text-sm text-ink-2">Your stomach knows something you don&apos;t.</p>
+          <p className="mt-3 text-xs text-ink-3">Try “2 scoop whey”, “aaj lunch mein 3 roti aur dal”, the mic, or scan a barcode with +.</p>
+        </div>
+      )}
+      {MEALS.map((m, idx) =>
+        groups[m].items.length || pending?.meal === m ? (
+          <MealCard key={m} meal={m} items={groups[m].items} kcal={groups[m].totals.calories} pendingText={pending?.meal === m ? pending.text : null} pendingPhoto={pending?.meal === m ? pending.photo : undefined} index={idx + 4} />
+        ) : null,
+      )}
+    </section>
+  );
 
   return (
-    <div className="stagger space-y-5">
-      <header className="flex items-center justify-between" style={{ ["--i" as string]: 0 }}>
-        <div className="flex items-center gap-3">
-          <span className="plunk face-lime flex h-9 w-9 items-center justify-center text-lg font-extrabold" style={{ ["--d" as string]: "3px" }} aria-hidden="true">
-            b
-          </span>
-          <div>
-            <p className="label">Today</p>
-            <h1 className="text-lg font-bold leading-tight">{dateLabel}</h1>
-          </div>
+    <div className="stagger space-y-5 lg:space-y-6">
+      <header className="flex items-center justify-between gap-3" style={{ ["--i" as string]: 0 }}>
+        <div>
+          <p className="label">Today</p>
+          <h1 className="text-lg font-bold leading-tight lg:text-3xl lg:font-extrabold lg:tracking-tight">
+            <span className="lg:hidden">{dateShort}</span>
+            <span className="hidden lg:inline">{dateLong}</span>
+          </h1>
         </div>
         {days > 0 && (
-          <span className="plunk face-yellow flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]" style={{ ["--d" as string]: "3px" }}>
+          <span className="plunk face-yellow flex shrink-0 items-center gap-1 px-2.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]" style={{ ["--d" as string]: "3px" }}>
             <Icon.flame size={14} /> {days} day streak
           </span>
         )}
       </header>
 
-      <Hero consumed={consumed.calories} target={targets?.calories ?? null} />
+      <NamePrompt />
 
-      {targets ? (
-        <>
-          <MacroBar consumed={consumed} target={targets} />
-          <StatTiles consumed={consumed} target={targets} />
-        </>
-      ) : (
-        <Link href="/settings" className="plunk face-card block p-4" style={{ ["--i" as string]: 2 }}>
-          <p className="label">Set up</p>
-          <p className="mt-1 font-bold">Add your profile to get calorie and macro targets →</p>
-        </Link>
-      )}
-
-      <RepeatCard yesterday={yesterday} todayMeals={groups} />
-
-      <section aria-label="Meals" className="space-y-3">
-        {day.items.length === 0 && !pending && (
-          <div className="card p-5 text-center" style={{ ["--i" as string]: 4 }}>
-            <p className="font-semibold">Nothing logged yet.</p>
-            <p className="mt-1 text-sm text-ink-2">Your stomach knows something you don&apos;t.</p>
-            <p className="mt-3 text-xs text-ink-3">Try “2 scoop whey” or “aaj lunch mein 3 roti aur dal”.</p>
-          </div>
-        )}
-        {MEALS.map((m, idx) =>
-          groups[m].items.length || pending?.meal === m ? (
-            <MealCard key={m} meal={m} items={groups[m].items} kcal={groups[m].totals.calories} pendingText={pending?.meal === m ? pending.text : null} pendingPhoto={pending?.meal === m ? pending.photo : undefined} index={idx + 4} />
-          ) : null,
-        )}
-      </section>
+      <div className="space-y-5 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6 lg:space-y-0 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+        <div className="space-y-5">
+          <Hero consumed={consumed.calories} target={targets?.calories ?? null} />
+          {targets ? (
+            <>
+              <MacroBar consumed={consumed} target={targets} />
+              <StatTiles consumed={consumed} target={targets} />
+              <div className="hidden lg:block">
+                <MicrosCard items={day.items} calories={targets.calories} sex={profile?.sex} />
+              </div>
+            </>
+          ) : (
+            <Link href="/settings" className="plunk face-card block p-4" style={{ ["--i" as string]: 2 }}>
+              <p className="label">Set up</p>
+              <p className="mt-1 font-bold">Add your profile to get calorie and macro targets →</p>
+            </Link>
+          )}
+        </div>
+        <div className="space-y-5">
+          {targets && (
+            <div className="hidden gap-5 lg:grid lg:grid-cols-2">
+              <EnergySplit consumed={consumed} target={targets} />
+              <MealSplit groups={groups} total={consumed.calories} />
+            </div>
+          )}
+          <RepeatCard yesterday={yesterday} todayMeals={groups} />
+          {meals}
+          {targets && (
+            <>
+              <div className="lg:hidden">
+                <MicrosCard items={day.items} calories={targets.calories} sex={profile?.sex} />
+              </div>
+              <div className="hidden lg:block">
+                <WeekStrip today={today} fallback={targets} />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+/* ------------------------------ name prompt ------------------------------ */
+
+const PROMPT_KEY = "bite-name-prompt";
+const readDismissed = () => {
+  try {
+    return localStorage.getItem(PROMPT_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const noopSub = () => () => {};
+
+/** Once, on Today: ask what to call you. */
+function NamePrompt() {
+  const { name, setName } = useApp();
+  const stored = useSyncExternalStore(noopSub, readDismissed, () => true);
+  const [hidden, setHidden] = useState(false);
+  const [value, setValue] = useState("");
+  if (name || stored || hidden) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(PROMPT_KEY, "1");
+    } catch {
+      /* private mode: just hide for now */
+    }
+    setHidden(true);
+  };
+  return (
+    <form
+      className="card flex items-end gap-2 border-l-[6px] border-l-violet p-3"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!value.trim()) return;
+        const r = await setName(value);
+        if (r.ok) dismiss();
+      }}
+    >
+      <label className="field compact flex-1">
+        <span>What should we call you?</span>
+        <input value={value} maxLength={40} autoComplete="given-name" onChange={(e) => setValue(e.target.value)} />
+      </label>
+      <button type="submit" className="pop-btn sm lime shrink-0" disabled={!value.trim()}>
+        Save
+      </button>
+      <button type="button" onClick={dismiss} className="mb-1 flex h-9 w-9 shrink-0 items-center justify-center text-ink-3 hover:text-ink" aria-label="Not now">
+        <Icon.close size={16} />
+      </button>
+    </form>
+  );
+}
+
+/* ------------------------------ desktop charts ------------------------------ */
+
+function EnergySplit({ consumed, target }: { consumed: Targets; target: Targets }) {
+  const segs = [
+    { key: "protein", label: "Protein", value: consumed.protein_g * 4, color: "var(--protein)", detail: `${fmtG(consumed.protein_g)} of ${target.protein_g} g` },
+    { key: "carbs", label: "Carbs", value: consumed.carbs_g * 4, color: "var(--carbs)", detail: `${fmtG(consumed.carbs_g)} of ${target.carbs_g} g` },
+    { key: "fat", label: "Fat", value: consumed.fat_g * 9, color: "var(--fat)", detail: `${fmtG(consumed.fat_g)} of ${target.fat_g} g` },
+  ];
+  const empty = segs.every((x) => x.value === 0);
+  return (
+    <section className="plunk face-card p-4" style={{ ["--d" as string]: "4px" }}>
+      <p className="label">Where today&apos;s calories came from</p>
+      <div className="mt-3">
+        {empty ? (
+          <p className="py-10 text-center text-sm text-ink-3">Log something to see the split.</p>
+        ) : (
+          <Donut
+            segments={segs}
+            size={132}
+            thickness={20}
+            caption="Share of today's calories by macro"
+            center={
+              <>
+                <span className="num text-xl font-extrabold">{fmtInt(consumed.calories)}</span>
+                <span className="label !text-[10px]">kcal</span>
+              </>
+            }
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+function MealSplit({ groups, total }: { groups: ReturnType<typeof byMeal>; total: number }) {
+  return (
+    <section className="plunk face-card p-4" style={{ ["--d" as string]: "4px" }}>
+      <p className="label">Calories by meal · kcal</p>
+      <div className="mt-3">
+        {total === 0 ? (
+          <p className="py-10 text-center text-sm text-ink-3">No meals yet.</p>
+        ) : (
+          <BarList
+            max={total}
+            rows={MEALS.map((m) => ({
+              key: m,
+              label: (
+                <span className="flex items-center gap-2">
+                  <span aria-hidden="true">{MEAL_STYLE[m].glyph}</span>
+                  {MEAL_STYLE[m].label}
+                </span>
+              ),
+              value: groups[m].totals.calories,
+              display: `${fmtInt(groups[m].totals.calories)} · ${Math.round((groups[m].totals.calories / total) * 100)}%`,
+              color: MEAL_STYLE[m].color,
+            }))}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Last 7 days at a glance (desktop). */
+function WeekStrip({ today, fallback }: { today: string; fallback: Targets }) {
+  const { summaries } = useApp();
+  const dates = lastNDates(today, 7);
+  const max = Math.max(fallback.calories * 1.3, ...dates.map((d) => summaries[d]?.calories ?? 0));
+  return (
+    <section className="card p-4">
+      <div className="flex items-baseline justify-between">
+        <p className="label">Last 7 days</p>
+        <Link href="/progress" className="text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2 hover:text-ink">
+          Progress →
+        </Link>
+      </div>
+      <div className="mt-3 grid grid-cols-7 gap-2">
+        {dates.map((d) => {
+          const r = summaries[d];
+          const c = r?.count ? classifyDay(r, r.target ?? fallback) : null;
+          const color = c ? { hit: "var(--ok)", over: "var(--over)", under: "var(--under)", low: "var(--ink-3)" }[c.status] : "var(--line-soft)";
+          return (
+            <div key={d} className="flex flex-col items-center gap-1">
+              <div className="flex h-20 w-full items-end bg-elevated/50">
+                <div className={`w-full ${c?.status === "over" ? "hatch" : ""}`} style={{ height: `${r?.count ? Math.max(4, (r.calories / max) * 100) : 2}%`, backgroundColor: color }} />
+              </div>
+              <span className="num text-[11px] font-bold">{r?.count ? fmtInt(r.calories) : "—"}</span>
+              <span className="text-[10px] uppercase text-ink-3">
+                {new Date(`${d}T00:00`).toLocaleDateString("en-IN", { weekday: "short" })} {c ? STATUS_META[c.status].glyph : ""}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -239,7 +419,8 @@ function MealCard({ meal, items, kcal, pendingText, pendingPhoto, index }: { mea
   const style = MEAL_STYLE[meal];
   return (
     <div className="plunk face-card" style={{ ["--i" as string]: index, ["--d" as string]: "4px" }}>
-      <button className="flex w-full items-center justify-between gap-3 p-4 text-left" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
+      <div className="flex items-center">
+      <button className="flex min-w-0 flex-1 items-center justify-between gap-3 p-4 pr-2 text-left" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
         <span className="flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center text-lg font-bold text-[#0d0d0d]" style={{ background: style.color }} aria-hidden="true">
             {style.glyph}
@@ -261,6 +442,17 @@ function MealCard({ meal, items, kcal, pendingText, pendingPhoto, index }: { mea
           </span>
         </span>
       </button>
+      {items.length > 0 && (
+        <button
+          className="mr-2 flex h-10 w-10 shrink-0 items-center justify-center text-ink-3 hover:text-ink"
+          onClick={() => setSheet({ kind: "saveMeal", items: items.map((i) => ParsedItemSchema.parse(i)), name: `My ${style.label.toLowerCase()}` })}
+          aria-label={`Save this ${style.label.toLowerCase()} as a meal`}
+          title="Save as meal"
+        >
+          <Icon.bookmark size={16} />
+        </button>
+      )}
+      </div>
       {open && (
         <ul id={id} className="border-t border-line-soft">
           {items.map((i) => (

@@ -4,6 +4,7 @@
  * pre-computed facts so it never has to do arithmetic.
  */
 import { foodKey } from "./calibration";
+import { microTargets, sumMicros } from "./micros";
 import { classifyDay } from "./progress";
 import type { CoachResponse, DayLog, LogItem, Profile } from "./schemas";
 import type { Targets } from "./targets";
@@ -182,6 +183,32 @@ export function computeInsights({ today, days, targets: t, profile, now = new Da
         weight: 20,
       });
     }
+  }
+
+  // ---------- sodium ----------
+  // Only days where most items carry micro data, so older entries don't hide it.
+  const naLimit = microTargets(t.calories, profile?.sex).sodium_mg;
+  const naDays = complete.map((r) => ({ r, m: sumMicros(r.items) })).filter(({ m }) => m.count && m.covered / m.count >= 0.8);
+  const salty = naDays.filter(({ m }) => m.total.sodium_mg > naLimit);
+  if (naDays.length >= 2 && salty.length >= 2) {
+    const bySource = new Map<string, { name: string; na: number; n: number }>();
+    for (const { r } of salty) for (const i of r.items) {
+      if (!i.micros) continue;
+      const k = foodKey(i.name);
+      const f = bySource.get(k) ?? { name: i.name, na: 0, n: 0 };
+      f.na += i.micros.sodium_mg;
+      f.n++;
+      bySource.set(k, f);
+    }
+    const top = [...bySource.values()].sort((a, b) => b.na - a.na).slice(0, 2);
+    const avg = Math.round(salty.reduce((s, x) => s + x.m.total.sodium_mg, 0) / salty.length);
+    out.push({
+      id: "sodium",
+      tone: "warn",
+      title: `Sodium over ${naLimit.toLocaleString("en-IN")} mg on ${salty.length} of ${naDays.length} days`,
+      detail: `Averaging ~${avg.toLocaleString("en-IN")} mg on those days.${top.length ? ` Biggest sources: ${top.map((f) => `${f.name} (~${Math.round(f.na / f.n)} mg each)`).join(", ")}.` : ""} Go easy on pickles, papad, namkeen and packaged snacks, and taste before adding salt.`,
+      weight: 28,
+    });
   }
 
   // ---------- snacks share ----------

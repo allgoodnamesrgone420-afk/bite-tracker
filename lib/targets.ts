@@ -20,6 +20,20 @@ export type TargetCalc = {
   floor: number;
   /** Rate actually used after the 1%/week cap (kg/week, signed: negative = loss). */
   effectiveRateKg: number;
+  /** Maintenance from the formula alone, for comparison with the adaptive estimate. */
+  formulaTdee: number;
+  /** Weight the targets were calculated for (your trend weight when you weigh in). */
+  weightKg: number;
+  adaptive: boolean;
+};
+
+/** Inputs from your own data that refine the formula. */
+export type Adapt = {
+  /** Trend weight from recent weigh-ins; replaces the profile weight. */
+  weightKg?: number;
+  /** Maintenance estimated from your logs and weigh-ins; replaces the formula TDEE. */
+  tdee?: number;
+  tdeeNote?: string;
 };
 
 export const ACTIVITY_MULTIPLIER = { sedentary: 1.2, light: 1.375, moderate: 1.55, active: 1.725 } as const;
@@ -50,10 +64,12 @@ export function macrosFor(calories: number, weightKg: number, goal: Profile["goa
   return { protein_g, fat_g, carbs_g, fibre_g, proteinCapped: proteinByWeight > proteinCap };
 }
 
-export function computeTargets(p: Profile, overrides: TargetOverrides = {}): TargetCalc {
+export function computeTargets(profile: Profile, overrides: TargetOverrides = {}, adapt: Adapt = {}): TargetCalc {
   const steps: CalcStep[] = [];
   const warnings: string[] = [];
-  const floor = CALORIE_FLOOR[p.sex];
+  const floor = CALORIE_FLOOR[profile.sex];
+  const p = adapt.weightKg ? { ...profile, weightKg: Math.round(adapt.weightKg * 10) / 10 } : profile;
+  if (adapt.weightKg) steps.push({ label: "Weight", math: "trend of your recent weigh-ins", value: `${p.weightKg} kg` });
 
   const bmr = mifflinStJeor(p);
   steps.push({
@@ -63,8 +79,13 @@ export function computeTargets(p: Profile, overrides: TargetOverrides = {}): Tar
   });
 
   const mult = ACTIVITY_MULTIPLIER[p.activity];
-  const tdee = bmr * mult;
-  steps.push({ label: "Maintenance (TDEE)", math: `${fmt(bmr)} × ${mult} (${p.activity})`, value: `${fmt(tdee)} kcal` });
+  const formulaTdee = bmr * mult;
+  const tdee = adapt.tdee ?? formulaTdee;
+  if (adapt.tdee) {
+    steps.push({ label: "Maintenance (from your data)", math: adapt.tdeeNote ?? `formula says ${fmt(formulaTdee)}`, value: `${fmt(tdee)} kcal` });
+  } else {
+    steps.push({ label: "Maintenance (TDEE)", math: `${fmt(bmr)} × ${mult} (${p.activity})`, value: `${fmt(tdee)} kcal` });
+  }
 
   let calories = tdee;
   let effectiveRateKg = 0;
@@ -141,5 +162,16 @@ export function computeTargets(p: Profile, overrides: TargetOverrides = {}): Tar
     fibre_g: overrides.fibre_g ?? m.fibre_g,
   };
 
-  return { targets, steps, warnings, bmr: Math.round(bmr), tdee: Math.round(tdee), floor, effectiveRateKg };
+  return {
+    targets,
+    steps,
+    warnings,
+    bmr: Math.round(bmr),
+    tdee: Math.round(tdee),
+    floor,
+    effectiveRateKg,
+    formulaTdee: Math.round(formulaTdee),
+    weightKg: p.weightKg,
+    adaptive: adapt.tdee !== undefined,
+  };
 }

@@ -3,8 +3,8 @@
  * IndexedDB, so offline you can still open the app, view history, use the food
  * library and add entries manually. API calls (AI) are never cached.
  */
-const VERSION = "bite-v1";
-const SHELL = ["/", "/progress", "/coach", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
+const VERSION = "bite-v2";
+const SHELL = ["/", "/progress", "/coach", "/foods", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
 const MAX_ENTRIES = 250; // hashed build assets pile up across deploys; keep the newest
 
 async function remember(req, res) {
