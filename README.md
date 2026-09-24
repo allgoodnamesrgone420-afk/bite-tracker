@@ -13,6 +13,29 @@ Describe what you ate ("2 rotis, a bowl of dal and a small bowl of curd at lunch
 5. **Editing.** Tap any logged item to change the numbers, delete it, or type a fix in **Correct this** ("that was 1 tbsp of oil, not 3"). The AI applies corrections. Offline, or without a key, simple ones like "it was 3" or "only half" still work; recipe changes need the AI. Edited numbers calibrate that food.
 6. **Photos.** The camera icon in the input opens the phone camera (or a picker on desktop). The photo is downsized to about 1024px in the browser and sent to `/api/parse-photo` (vision model), which breaks it into items with portions and macros. Anything typed in the box goes along as a caption ("that was 2 plates"). Photos are analysed in memory and never stored. **This needs the API key.**
 
+## Accounts & sync
+
+With Supabase connected, Bite has accounts and syncs across devices:
+
+- **Sign in** with email + password. Sign-up is **invite-only**: a database trigger rejects any email that isn't on the invite list, and the owner manages invites in Settings → People.
+- **Local-first sync.** Each device keeps a full copy in IndexedDB, so the app is instant and works offline. Every change goes into an outbox, gets pushed to Postgres, and changes from other devices are pulled and merged by record (`lib/sync.ts`, `lib/sync-core.ts`). The server's `updated_at` decides order, so the last write to reach the server wins per item. Syncs run after edits, on focus, when you're back online, and every minute.
+- **Privacy.** Row-level security (`supabase/schema.sql`) means each user can only read and write their own rows, and only while their email is still invited. Removing someone cuts off their sync and AI access.
+- **AI routes** accept only a signed-in, invited user, which replaces the passcode. Without Supabase the app runs in local-only mode, exactly as before.
+- **Signing out** clears this device; your data stays in your account. The first sign-in on a device uploads anything logged there before the account existed.
+
+### Setting it up
+
+1. In Vercel, open the `bite-tracker` project → **Storage** → **Create Database** → **Supabase**, pick a region near you, and connect it to all environments. This adds the Supabase env vars to the project.
+2. Pull the env vars locally, then create the tables and register yourself as owner:
+   ```bash
+   npx vercel env pull .env.local
+   ```
+   ```bash
+   npm run db:setup -- you@example.com
+   ```
+3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to your production URL, and add `https://<your-domain>/**` and `http://localhost:3000/**` to **Redirect URLs** (for confirmation and password-reset links).
+4. Redeploy, open the site, choose **New account** with the owner email, confirm it from your inbox, and sign in.
+
 ## Architecture
 
 - **Next.js 16 App Router + TypeScript + Tailwind v4 + Zod.** Client-rendered screens; three stateless route handlers: `/api/parse` (text), `/api/parse-photo` (vision) and `/api/coach`. The client owns all fallbacks (food library, built-in coach), so the server stays a thin, keyed proxy to the model.
@@ -20,7 +43,8 @@ Describe what you ate ("2 rotis, a bowl of dal and a small bowl of curd at lunch
 - **`lib/server/guard.ts`** handles the optional `APP_PASSCODE` header check (constant-time), a per-IP token-bucket rate limit (20/min for parse), body-size limits and error mapping. **`lib/server/prompts.ts`** holds the static, cache-friendly system prompt. User text goes inside `<input>` tags with `<`/`>` neutralised.
 - **`lib/targets.ts`** is pure code: Mifflin-St Jeor → TDEE → goal adjustment (7,700 kcal/kg) → protein / fat / carbs / fibre. It enforces the 1,200 kcal (women) and 1,500 kcal (men) floors, caps loss at 1% of body weight per week, and returns every step for "How we calculated this".
 - **`lib/totals.ts`** sums totals, per-meal splits, remaining, macro split and streak. The LLM never does totals arithmetic.
-- **`lib/db.ts`** stores everything in IndexedDB (`idb-keyval`) under these keys: `profile`, `overrides`, `passcode`, `summaries` (one compact row per day), `day:YYYY-MM-DD`, and `parseCache` (keyed by normalised text + meal slot, so repeated inputs make no API call). It also handles JSON export/import.
+- **`lib/db.ts`** stores everything on the device in IndexedDB (`idb-keyval`): `profile`, `overrides`, `summaries` (one compact row per day), `day:YYYY-MM-DD`, `myFoods`, `parseCache`, and the sync outbox and cursor. It also handles JSON export/import.
+- **Supabase** (Postgres + Auth) is the cloud copy when accounts are enabled: tables `profiles`, `log_items`, `my_foods` and `allowed_emails`, all behind row-level security.
 
 ## Setup
 
@@ -72,7 +96,7 @@ A service worker (`public/sw.js`, registered only in production) caches the app 
 
 ## Security notes
 
-- No env var is prefixed `NEXT_PUBLIC_`, and `lib/llm.ts`, `lib/server/*` import `server-only`, so importing them from a client component fails the build.
+- The only `NEXT_PUBLIC_` vars are the Supabase URL and anon/publishable key, which are public by design; row-level security protects the data. The service-role key is never used. `lib/llm.ts` and `lib/server/*` import `server-only`, so importing them from a client component fails the build.
 - Verified by building with sentinel values and grepping `.next/static`. No key, passcode value, provider host or system prompt is in client JS.
 - The server logs only an error code and model name, never payloads or keys. Photos are analysed in memory and never stored.
 - Security headers on every route: `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and a `Permissions-Policy` limiting device access to the camera. The service worker gets its own strict CSP.

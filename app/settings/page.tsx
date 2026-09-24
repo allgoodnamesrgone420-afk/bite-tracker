@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { useApp } from "@/components/AppProvider";
 import { Icon, PopButton, fmtInt } from "@/components/ui";
 import * as db from "@/lib/db";
+import { supabase, syncConfigured } from "@/lib/supabase";
 import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
 import { ProfileSchema, type Profile, type TargetOverrides } from "@/lib/schemas";
 import { computeTargets } from "@/lib/targets";
@@ -206,9 +207,11 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
         </PopButton>
       </form>
 
+      {syncConfigured && <AccountSection />}
+      {syncConfigured && <PeopleSection />}
       <AppearanceSection />
       <MyFoodsSection />
-      <PasscodeSection />
+      {!syncConfigured && <PasscodeSection />}
       <BackupSection onImported={reloadAll} />
     </div>
   );
@@ -227,6 +230,143 @@ function Field({ label, error, compact, children }: { label: string; error?: str
         </p>
       )}
     </div>
+  );
+}
+
+function AccountSection() {
+  const { account, sync, syncNow, signOut } = useApp();
+  const [busy, setBusy] = useState(false);
+  const status =
+    sync.status === "syncing"
+      ? { text: "Syncing…", cls: "text-ink-2" }
+      : sync.status === "error"
+        ? { text: `Sync failed: ${sync.error ?? "unknown error"}`, cls: "text-over" }
+        : sync.status === "offline"
+          ? { text: "Offline. Changes will sync when you're back.", cls: "text-warn" }
+          : sync.lastSyncedAt
+            ? { text: `Synced ${new Date(sync.lastSyncedAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}`, cls: "text-ok" }
+            : { text: "Waiting to sync", cls: "text-ink-2" };
+  return (
+    <section className="plunk face-card space-y-3 p-4">
+      <div>
+        <p className="label">Account</p>
+        <p className="mt-1 truncate font-bold">{account.user?.email}</p>
+        <p className={`mt-1 flex items-center gap-1.5 text-xs font-semibold ${status.cls}`} role="status" aria-live="polite">
+          {sync.status === "error" ? <Icon.alert size={13} /> : sync.status === "idle" ? <Icon.check size={13} /> : null}
+          {status.text}
+        </p>
+        <p className="mt-2 text-xs text-ink-2">Your log, profile and foods sync to your account, so every device you sign in on shows the same data.</p>
+      </div>
+      <div className="flex gap-3">
+        <PopButton
+          variant="ghost"
+          size="sm"
+          disabled={busy || sync.status === "syncing"}
+          onClick={async () => {
+            setBusy(true);
+            await syncNow();
+            setBusy(false);
+          }}
+        >
+          Sync now
+        </PopButton>
+        <PopButton variant="ghost" size="sm" onClick={() => void signOut()}>
+          Sign out
+        </PopButton>
+      </div>
+    </section>
+  );
+}
+
+type Invite = { email: string; role: "owner" | "member"; created_at: string };
+
+function PeopleSection() {
+  const { account } = useApp();
+  const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [email, setEmail] = useState("");
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const me = account.user?.email.toLowerCase() ?? "";
+
+  const load = async () => {
+    const res = await supabase()?.from("allowed_emails").select("email,role,created_at").order("created_at");
+    if (res && !res.error) setInvites(res.data as Invite[]);
+  };
+  useEffect(() => {
+    let live = true;
+    supabase()
+      ?.from("allowed_emails")
+      .select("email,role,created_at")
+      .order("created_at")
+      .then((res) => live && !res.error && setInvites(res.data as Invite[]));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // RLS only returns other people's rows to the owner; members see just themselves.
+  const isOwner = invites?.some((i) => i.email === me && i.role === "owner");
+  if (!isOwner) return null;
+
+  return (
+    <section className="card space-y-3 p-4">
+      <div>
+        <p className="label">People</p>
+        <p className="mt-1 text-xs text-ink-2">
+          Only invited emails can create an account. Invite someone, then send them the link: they sign up with that email and get their own private log.
+        </p>
+      </div>
+      <ul className="divide-y divide-line-soft border-y border-line-soft">
+        {invites!.map((i) => (
+          <li key={i.email} className="flex items-center gap-2 py-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{i.email}</span>
+            {i.role === "owner" ? (
+              <span className="tag text-ok">Owner</span>
+            ) : (
+              <button
+                className="flex h-9 w-9 items-center justify-center text-ink-3 hover:text-over"
+                aria-label={`Remove ${i.email}`}
+                onClick={async () => {
+                  if (!confirm(`Remove ${i.email}? They'll lose access to sync and AI features.`)) return;
+                  const res = await supabase()?.from("allowed_emails").delete().eq("email", i.email);
+                  setMsg(res?.error ? { ok: false, text: "Couldn't remove that invite." } : { ok: true, text: `Removed ${i.email}.` });
+                  await load();
+                }}
+              >
+                <Icon.trash size={16} />
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <form
+        className="flex gap-2"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const v = email.trim().toLowerCase();
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return setMsg({ ok: false, text: "Enter a valid email." });
+          const res = await supabase()?.from("allowed_emails").insert({ email: v, role: "member", invited_by: me });
+          if (res?.error) setMsg({ ok: false, text: res.error.code === "23505" ? "Already invited." : "Couldn't add that invite." });
+          else {
+            setMsg({ ok: true, text: `Invited ${v}. Send them ${window.location.origin}` });
+            setEmail("");
+            await load();
+          }
+        }}
+      >
+        <label className="field compact flex-1">
+          <span>Invite by email</span>
+          <input type="email" autoComplete="off" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <button type="submit" className="pop-btn sm lime shrink-0 self-center" disabled={!email.trim()}>
+          Invite
+        </button>
+      </form>
+      {msg && (
+        <p role="status" className={`text-xs ${msg.ok ? "text-ok" : "text-over"}`}>
+          {msg.text}
+        </p>
+      )}
+    </section>
   );
 }
 

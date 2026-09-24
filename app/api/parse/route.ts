@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 4_000; // 500-char text + optional correction item and context
 
 export async function POST(req: Request) {
-  const blocked = guard(req, "parse", 20);
+  const blocked = await guard(req, "parse", 20);
   if (blocked) return blocked;
 
   const body = await readJsonBody(req, MAX_BODY_BYTES);

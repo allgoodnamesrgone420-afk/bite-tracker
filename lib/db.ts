@@ -1,5 +1,5 @@
 "use client";
-import { clear, createStore, del, entries, get, getMany, set, setMany } from "idb-keyval";
+import { clear, createStore, del, entries, get, getMany, set, setMany, update } from "idb-keyval";
 import { z } from "zod";
 import {
   DayLogSchema,
@@ -11,6 +11,7 @@ import {
   type TargetOverrides,
 } from "./schemas";
 import type { PersonalFood } from "./calibration";
+import { diffDay, diffFoods, type FoodChange, type ItemChange } from "./sync-core";
 import type { CoachResult } from "./schemas";
 import type { Targets } from "./targets";
 import { sumItems, type Nutrients } from "./totals";
@@ -18,17 +19,100 @@ import { sumItems, type Nutrients } from "./totals";
 /**
  * All user data lives in IndexedDB on this device. Keys:
  *   profile, overrides, passcode, summaries, parseCache, myFoods,
- *   day:YYYY-MM-DD, coach:YYYY-MM-DD:mode
+ *   day:YYYY-MM-DD, coach:YYYY-MM-DD:mode,
+ *   outbox:items, outbox:foods, outbox:profile, sync:cursor, sync:owner
  */
 const store = createStore("bite-db", "kv");
 
 /** One compact row per logged day. `target` is a snapshot so old days are judged by the targets you had then. */
 export type DaySummary = Nutrients & { date: string; count: number; target?: Targets };
 
+/* ------------------------------ sync outbox ------------------------------ */
+// Every local write records what changed; the sync engine pushes it. Writes
+// that come *from* sync pass { fromSync: true } so they aren't queued again.
+
+type WriteOpts = { fromSync?: boolean };
+const listeners = new Set<() => void>();
+/** Subscribe to local (user-made) changes, e.g. to schedule a sync. */
+export function onLocalChange(cb: () => void) {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+const changed = () => listeners.forEach((cb) => cb());
+
+async function queueItems(changes: Record<string, ItemChange>) {
+  if (!Object.keys(changes).length) return;
+  await update<Record<string, ItemChange>>("outbox:items", (o) => ({ ...(o ?? {}), ...changes }), store);
+  changed();
+}
+async function queueFoods(changes: Record<string, FoodChange>) {
+  if (!Object.keys(changes).length) return;
+  await update<Record<string, FoodChange>>("outbox:foods", (o) => ({ ...(o ?? {}), ...changes }), store);
+  changed();
+}
+async function queueProfile() {
+  await update<number>("outbox:profile", (n) => (n ?? 0) + 1, store);
+  changed();
+}
+
+export const getOutbox = async () => ({
+  items: (await get<Record<string, ItemChange>>("outbox:items", store)) ?? {},
+  foods: (await get<Record<string, FoodChange>>("outbox:foods", store)) ?? {},
+  profile: (await get<number>("outbox:profile", store)) ?? 0,
+});
+
+/** Drop pushed entries, but only if they weren't changed again meanwhile. */
+export async function ackOutbox(pushed: Awaited<ReturnType<typeof getOutbox>>) {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  await update<Record<string, ItemChange>>(
+    "outbox:items",
+    (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([id, c]) => !same(pushed.items[id], c))),
+    store,
+  );
+  await update<Record<string, FoodChange>>(
+    "outbox:foods",
+    (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([k, c]) => !(k in pushed.foods && same(pushed.foods[k], c)))),
+    store,
+  );
+  await update<number>("outbox:profile", (n) => ((n ?? 0) === pushed.profile ? 0 : (n ?? 0)), store);
+}
+
+/** Queue everything on this device (first sign-in: upload data made before the account). */
+export async function queueAllLocal() {
+  const all = await entries(store);
+  const items: Record<string, ItemChange> = {};
+  for (const [k, v] of all) {
+    if (!String(k).startsWith("day:")) continue;
+    const d = v as DayLog;
+    for (const i of d.items) items[i.id] = { date: d.date, item: i };
+  }
+  await queueItems(items);
+  await queueFoods(await getMyFoods());
+  if (await getProfile()) await queueProfile();
+}
+
+export const getSyncMeta = async () => ({
+  cursor: (await get<string>("sync:cursor", store)) ?? null,
+  owner: (await get<string>("sync:owner", store)) ?? null,
+});
+export const setSyncCursor = (c: string) => set("sync:cursor", c, store);
+export const setSyncOwner = (id: string) => set("sync:owner", id, store);
+
+/** Wipe everything on this device (sign-out, or a different account signing in). */
+export const clearLocal = () => clear(store);
+
+/* ------------------------------ records ------------------------------ */
+
 export const getProfile = () => get<Profile>("profile", store);
-export const saveProfile = (p: Profile) => set("profile", p, store);
+export async function saveProfile(p: Profile, opts: WriteOpts = {}) {
+  await set("profile", p, store);
+  if (!opts.fromSync) await queueProfile();
+}
 export const getOverrides = async () => (await get<TargetOverrides>("overrides", store)) ?? {};
-export const saveOverrides = (o: TargetOverrides) => set("overrides", o, store);
+export async function saveOverrides(o: TargetOverrides, opts: WriteOpts = {}) {
+  await set("overrides", o, store);
+  if (!opts.fromSync) await queueProfile();
+}
 export const getPasscode = () => get<string>("passcode", store);
 export const savePasscode = (p: string) => (p ? set("passcode", p, store) : del("passcode", store));
 
@@ -44,7 +128,8 @@ export async function getDays(dates: string[]): Promise<DayLog[]> {
 }
 
 /** Saves a day and keeps the compact per-day summary index in sync. */
-export async function saveDay(day: DayLog, target?: Targets): Promise<Record<string, DaySummary>> {
+export async function saveDay(day: DayLog, target?: Targets, opts: WriteOpts = {}): Promise<Record<string, DaySummary>> {
+  if (!opts.fromSync) await queueItems(diffDay(await get<DayLog>(`day:${day.date}`, store), day));
   const summaries = await getSummaries();
   if (day.items.length) {
     summaries[day.date] = { date: day.date, count: day.items.length, ...sumItems(day.items), target: target ?? summaries[day.date]?.target };
@@ -63,7 +148,10 @@ export async function saveDay(day: DayLog, target?: Targets): Promise<Record<str
 /* --------------------------- personal foods --------------------------- */
 
 export const getMyFoods = async () => (await get<Record<string, PersonalFood>>("myFoods", store)) ?? {};
-export const saveMyFoods = (f: Record<string, PersonalFood>) => set("myFoods", f, store);
+export async function saveMyFoods(f: Record<string, PersonalFood>, opts: WriteOpts = {}) {
+  if (!opts.fromSync) await queueFoods(diffFoods(await getMyFoods(), f));
+  await set("myFoods", f, store);
+}
 
 /* --------------------------- coach cache ----------------------------- */
 
@@ -146,6 +234,9 @@ export async function importAll(raw: unknown): Promise<{ days: number }> {
   if (backup.profile) writes.push(["profile", backup.profile]);
   if (backup.myFoods) writes.push(["myFoods", backup.myFoods]);
   if (passcode) writes.push(["passcode", passcode]);
+  const meta = await getSyncMeta();
+  if (meta.owner) writes.push(["sync:owner", meta.owner]);
   await setMany(writes, store);
+  await queueAllLocal(); // imported data goes up to the account on the next sync
   return { days: backup.days.length };
 }

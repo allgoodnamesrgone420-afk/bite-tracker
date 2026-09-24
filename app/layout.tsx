@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Sora } from "next/font/google";
 import { AppProvider } from "@/components/AppProvider";
-import { ConfirmSheet } from "@/components/ConfirmSheet";
-import { Dock, Toast } from "@/components/Dock";
+import { AppShell } from "@/components/AppShell";
 import { ServiceWorker } from "@/components/ServiceWorker";
 import { ThemeWatcher } from "@/components/ThemeWatcher";
 import "./globals.css";
@@ -37,12 +36,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <ThemeWatcher />
         <ServiceWorker />
         <AppProvider>
-          <main className="mx-auto min-h-dvh max-w-[430px] px-5 pb-[calc(var(--dock-h)+32px+env(safe-area-inset-bottom))] pt-[max(16px,env(safe-area-inset-top))]">
-            {children}
-          </main>
-          <Toast />
-          <Dock />
-          <ConfirmSheet />
+          <AppShell>{children}</AppShell>
         </AppProvider>
       </body>
     </html>

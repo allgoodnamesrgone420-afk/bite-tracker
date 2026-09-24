@@ -8,6 +8,8 @@ import * as db from "@/lib/db";
 import type { DaySummary } from "@/lib/db";
 import { localParse, type LocalParse } from "@/lib/local-parser";
 import { LogItemSchema, ParsedItemSchema, type ApiErrorCode, type DayLog, type LogItem, type Meal, type ParsedItem, type ParseRequest, type Profile, type TargetOverrides } from "@/lib/schemas";
+import { supabase, syncConfigured } from "@/lib/supabase";
+import { syncNow } from "@/lib/sync";
 import { computeTargets, type TargetCalc } from "@/lib/targets";
 import { dateKey, mealForTime, sumItems } from "@/lib/totals";
 
@@ -34,6 +36,16 @@ export type Sheet =
 export type CorrectionResult = { ok: true; items: ParsedItem[]; notice?: string } | { ok: false; message: string };
 
 type Pending = { text: string; meal: Meal; photo?: string };
+
+export type Account = {
+  /** Supabase connected on this deployment (otherwise local-only mode). */
+  configured: boolean;
+  ready: boolean;
+  user: { id: string; email: string } | null;
+  /** Arrived via a password-reset link: show "set new password". */
+  recovering: boolean;
+};
+export type SyncState = { status: "off" | "idle" | "syncing" | "error" | "offline"; lastSyncedAt: number | null; error?: string };
 type Toast = { message: string; undo?: () => void; id: number };
 
 type AppState = {
@@ -67,6 +79,11 @@ type AppState = {
   repeatItems: (items: LogItem[], label: string, meal?: Meal) => void;
   reloadAll: () => Promise<void>;
   dismissToast: () => void;
+  account: Account;
+  sync: SyncState;
+  syncNow: () => Promise<void>;
+  signOut: () => Promise<void>;
+  finishRecovery: () => void;
 };
 
 const Ctx = createContext<AppState | null>(null);
@@ -142,6 +159,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [sheet, setSheet] = useState<Sheet>({ kind: "closed" });
   const [toast, setToast] = useState<Toast | null>(null);
+  const [account, setAccount] = useState<Account>({ configured: syncConfigured, ready: !syncConfigured, user: null, recovering: false });
+  const [sync, setSync] = useState<SyncState>({ status: "off", lastSyncedAt: null });
   const today = day.date;
 
   const calc = useMemo(() => (profile ? computeTargets(profile, overrides) : null), [profile, overrides]);
@@ -182,6 +201,111 @@ export function AppProvider({ children }: { children: ReactNode }) {
       document.removeEventListener("visibilitychange", tick);
     };
   }, [applySnapshot]);
+
+  /* ------------------------------ account & sync ------------------------------ */
+
+  // Track the Supabase session. (No Supabase calls inside the callback: the SDK warns against it.)
+  useEffect(() => {
+    const sb = supabase();
+    if (!sb) return;
+    const toUser = (u: { id: string; email?: string } | null | undefined) => (u ? { id: u.id, email: u.email ?? "" } : null);
+    sb.auth.getSession().then(({ data }) => setAccount((a) => ({ ...a, ready: true, user: toUser(data.session?.user) })));
+    const { data } = sb.auth.onAuthStateChange((event, session) => {
+      setAccount((a) => ({
+        ...a,
+        ready: true,
+        user: toUser(session?.user),
+        recovering: event === "PASSWORD_RECOVERY" ? true : event === "SIGNED_OUT" ? false : a.recovering,
+      }));
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  const userId = account.user?.id ?? null;
+  const [deviceReady, setDeviceReady] = useState<string | null>(null);
+
+  const runSync = useCallback(async () => {
+    const sb = supabase();
+    if (!sb || !userId || deviceReady !== userId) return;
+    if (!navigator.onLine) {
+      setSync((s) => ({ ...s, status: "offline" }));
+      return;
+    }
+    setSync((s) => ({ ...s, status: "syncing" }));
+    try {
+      const r = await syncNow(sb, userId);
+      if (r.changedLocal) await reloadAll();
+      setSync({ status: "idle", lastSyncedAt: Date.now() });
+    } catch (e) {
+      setSync((s) => ({ ...s, status: "error", error: (e as Error).message.slice(0, 160) }));
+    }
+  }, [userId, deviceReady, reloadAll]);
+
+  // Signing in on this device: data from a different account is wiped; data made
+  // before any account existed is uploaded to this one.
+  useEffect(() => {
+    if (!userId) return;
+    let live = true;
+    (async () => {
+      const meta = await db.getSyncMeta();
+      if (meta.owner && meta.owner !== userId) await db.clearLocal();
+      if (meta.owner !== userId) {
+        const hadData = meta.owner === null;
+        await db.setSyncOwner(userId);
+        if (hadData) await db.queueAllLocal();
+        await reloadAll();
+      }
+      if (live) setDeviceReady(userId);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [userId, reloadAll]);
+
+  // When to sync: once ready, after local edits (debounced), on focus, when back online, every minute.
+  useEffect(() => {
+    if (!userId || deviceReady !== userId) return;
+    void runSync();
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const soon = () => {
+      clearTimeout(t);
+      t = setTimeout(() => void runSync(), 1_500);
+    };
+    const off = db.onLocalChange(soon);
+    const onVisible = () => document.visibilityState === "visible" && void runSync();
+    const onOnline = () => void runSync();
+    const onOffline = () => setSync((s) => ({ ...s, status: "offline" }));
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    const interval = setInterval(() => document.visibilityState === "visible" && void runSync(), 60_000);
+    return () => {
+      clearTimeout(t);
+      off();
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      clearInterval(interval);
+    };
+  }, [userId, deviceReady, runSync]);
+
+  const signOut = useCallback(async () => {
+    const sb = supabase();
+    if (!sb) return;
+    const out = await db.getOutbox();
+    const unsynced = Object.keys(out.items).length + Object.keys(out.foods).length + out.profile;
+    if (unsynced && navigator.onLine) await runSync();
+    const left = await db.getOutbox();
+    const stillUnsynced = Object.keys(left.items).length + Object.keys(left.foods).length + left.profile;
+    if (stillUnsynced && !confirm(`${stillUnsynced} change(s) haven't synced yet and will be lost if you sign out now. Sign out anyway?`)) return;
+    await sb.auth.signOut();
+    await db.clearLocal(); // your data stays safe in your account
+    setDeviceReady(null);
+    setSync({ status: "off", lastSyncedAt: null });
+    await reloadAll();
+  }, [runSync, reloadAll]);
+
+  const finishRecovery = useCallback(() => setAccount((a) => ({ ...a, recovering: false })), []);
 
   const dismissToast = useCallback(() => setToast(null), []);
   const showToast = useCallback((message: string, undo?: () => void) => {
@@ -227,7 +351,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setPending(null);
 
     if (!res.ok) {
-      if (res.error.code === "unauthorized") setSheet({ kind: "passcode", retry: req });
+      if (res.error.code === "unauthorized" && !syncConfigured) setSheet({ kind: "passcode", retry: req });
       else if (hasLocal) {
         fallback(
           res.error.code === "config"
@@ -425,7 +549,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const res = await apiParse({ text: item.name, localTime: localTime(), diet: profile?.diet || undefined, correction: { item, text } });
       if (!res.ok) {
         if (res.error.code === "config") return fallback("No AI key set.");
-        if (res.error.code === "unauthorized") return { ok: false, message: "Passcode needed. Set it in Settings." };
+        if (res.error.code === "unauthorized") return { ok: false, message: res.error.message };
         return fallback(res.error.message);
       }
       if (!res.data.items.length) return { ok: false, message: "Couldn't apply that correction. Edit the numbers directly." };
@@ -484,6 +608,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     repeatItems,
     reloadAll,
     dismissToast,
+    account,
+    sync,
+    syncNow: runSync,
+    signOut,
+    finishRecovery,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

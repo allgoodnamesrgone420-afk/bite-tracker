@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 const MAX_BODY_BYTES = 3_000_000;
 
 export async function POST(req: Request) {
-  const blocked = guard(req, "photo", 8);
+  const blocked = await guard(req, "photo", 8);
   if (blocked) return blocked;
 
   const body = await readJsonBody(req, MAX_BODY_BYTES);
