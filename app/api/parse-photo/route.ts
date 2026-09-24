@@ -23,7 +23,7 @@ export async function POST(req: Request) {
   const { image, mediaType } = parsed.data;
 
   const result = await callLLM({
-    model: process.env.LLM_VISION_MODEL || "claude-sonnet-5",
+    task: "vision",
     system: PHOTO_SYSTEM,
     messages: [
       {

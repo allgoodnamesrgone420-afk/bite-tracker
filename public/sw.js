@@ -5,6 +5,19 @@
  */
 const VERSION = "bite-v1";
 const SHELL = ["/", "/progress", "/coach", "/settings", "/manifest.webmanifest", "/icons/icon-192.png"];
+const MAX_ENTRIES = 250; // hashed build assets pile up across deploys; keep the newest
+
+async function remember(req, res) {
+  const cache = await caches.open(VERSION);
+  await cache.put(req, res);
+  const keys = await cache.keys();
+  // Cache keys come back in insertion order: drop the oldest, never the app shell.
+  const extra = keys.length - MAX_ENTRIES;
+  if (extra > 0) {
+    const shell = new Set(SHELL.map((p) => new URL(p, self.location.origin).href));
+    await Promise.all(keys.filter((k) => !shell.has(k.url)).slice(0, extra).map((k) => cache.delete(k)));
+  }
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -31,8 +44,7 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put(req, copy));
+          if (res.ok) remember(req, res.clone());
           return res;
         })
         .catch(() => caches.match(req).then((hit) => hit || (req.mode === "navigate" ? caches.match("/") : Response.error()))),
@@ -47,8 +59,7 @@ self.addEventListener("fetch", (event) => {
         (hit) =>
           hit ||
           fetch(req).then((res) => {
-            const copy = res.clone();
-            caches.open(VERSION).then((c) => c.put(req, copy));
+            if (res.ok) remember(req, res.clone());
             return res;
           }),
       ),
@@ -61,10 +72,7 @@ self.addEventListener("fetch", (event) => {
     caches.match(req).then((hit) => {
       const fresh = fetch(req)
         .then((res) => {
-          if (res.ok) {
-            const copy = res.clone(); // clone before the page consumes the body
-            caches.open(VERSION).then((c) => c.put(req, copy));
-          }
+          if (res.ok) remember(req, res.clone()); // clone before the page consumes the body
           return res;
         })
         .catch(() => hit);

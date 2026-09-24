@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   if (!parsed.success) return errorResponse("bad_request", "Invalid coach request.");
 
   const result = await callLLM({
-    model: process.env.LLM_COACH_MODEL || "claude-sonnet-5",
+    task: "coach",
     system: COACH_SYSTEM,
     messages: [{ role: "user", content: buildCoachUserMessage(parsed.data) }],
     schema: CoachResponseSchema,

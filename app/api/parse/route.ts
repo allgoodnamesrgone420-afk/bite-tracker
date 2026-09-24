@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   }
 
   const result = await callLLM({
-    model: process.env.LLM_PARSER_MODEL || "claude-haiku-4-5",
+    task: "parse",
     system: PARSER_SYSTEM,
     messages: [{ role: "user", content: buildParserUserMessage(parsed.data) }],
     schema: ParseResultSchema,
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
   if (!result.ok) {
     switch (result.error.code) {
       case "config":
-        return errorResponse("config", "The server isn't set up yet (missing or invalid API key).");
+        return errorResponse("config", "The AI isn't set up yet (missing or invalid API key). Add it manually for now.");
       case "timeout":
         return errorResponse("timeout", "That took too long. Try again, or add it manually.");
       case "rate_limited":

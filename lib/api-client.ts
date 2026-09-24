@@ -33,6 +33,20 @@ async function post<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
   }
 }
 
+export type AIStatus = { configured: boolean; provider?: string; models?: Record<"parse" | "vision" | "coach", string>; effort?: string; problem?: string };
+
+export async function apiAIStatus(): Promise<AIStatus | null> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return null;
+  try {
+    const token = await accessToken();
+    const res = await fetch("/api/ai-status", { headers: token ? { authorization: `Bearer ${token}` } : {}, signal: AbortSignal.timeout(10_000) });
+    const json = (await res.json()) as ApiResponse<AIStatus>;
+    return json.ok ? json.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export const apiParse = (req: ParseRequest) => post<ParseResponse>("/api/parse", req);
 export const apiParsePhoto = (req: PhotoParseRequest) => post<ParseResponse>("/api/parse-photo", req);
 export const apiCoach = (req: CoachRequest) => post<CoachResult>("/api/coach", req);

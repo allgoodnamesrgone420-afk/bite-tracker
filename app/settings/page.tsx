@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useApp } from "@/components/AppProvider";
 import { Icon, PopButton, fmtInt } from "@/components/ui";
+import { apiAIStatus, type AIStatus } from "@/lib/api-client";
 import * as db from "@/lib/db";
 import { supabase, syncConfigured } from "@/lib/supabase";
 import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
@@ -209,6 +210,7 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
 
       {syncConfigured && <AccountSection />}
       {syncConfigured && <PeopleSection />}
+      <AISection />
       <AppearanceSection />
       <MyFoodsSection />
       {!syncConfigured && <PasscodeSection />}
@@ -274,6 +276,59 @@ function AccountSection() {
           Sign out
         </PopButton>
       </div>
+    </section>
+  );
+}
+
+const PROVIDER_NAME: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Google Gemini",
+  groq: "Groq",
+  openrouter: "OpenRouter",
+  deepseek: "DeepSeek",
+  xai: "xAI",
+  mistral: "Mistral",
+  compatible: "OpenAI-compatible",
+};
+
+function AISection() {
+  const [status, setStatus] = useState<AIStatus | null | undefined>(undefined);
+  useEffect(() => {
+    let live = true;
+    apiAIStatus().then((s) => live && setStatus(s));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return (
+    <section className="card space-y-2 p-4">
+      <p className="label">AI</p>
+      {status === undefined ? (
+        <p className="pulse text-sm text-ink-3">Checking…</p>
+      ) : !status ? (
+        <p className="text-sm text-ink-2">Couldn&apos;t reach the server.</p>
+      ) : status.configured ? (
+        <>
+          <p className="font-bold">
+            {PROVIDER_NAME[status.provider ?? ""] ?? status.provider}
+            {status.effort && <span className="ml-2 tag text-ink-2">{status.effort} effort</span>}
+          </p>
+          <dl className="num grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+            <dt className="text-ink-3">Text</dt>
+            <dd className="truncate">{status.models?.parse}</dd>
+            <dt className="text-ink-3">Photos</dt>
+            <dd className="truncate">{status.models?.vision}</dd>
+            <dt className="text-ink-3">Coach</dt>
+            <dd className="truncate">{status.models?.coach}</dd>
+          </dl>
+        </>
+      ) : (
+        <p className="flex items-start gap-1.5 text-sm text-warn">
+          <Icon.alert size={14} /> Not set up: {status.problem}. The food library and built-in coach still work.
+        </p>
+      )}
+      <p className="text-xs text-ink-3">Switch providers by changing LLM_API_KEY (and LLM_PROVIDER / LLM_MODEL if needed) in Vercel, then redeploy.</p>
     </section>
   );
 }
@@ -485,7 +540,9 @@ function BackupSection({ onImported }: { onImported: () => Promise<void> }) {
     <section className="card space-y-3 p-4">
       <div>
         <p className="label">Backup</p>
-        <p className="mt-1 text-xs text-ink-2">Everything lives in this browser. Export a JSON file now and then.</p>
+        <p className="mt-1 text-xs text-ink-2">
+          {syncConfigured ? "Your data is safely in your account. Export a JSON copy any time." : "Everything lives in this browser. Export a JSON file now and then."}
+        </p>
       </div>
       <div className="flex gap-3">
         <PopButton
@@ -517,7 +574,10 @@ function BackupSection({ onImported }: { onImported: () => Promise<void> }) {
             const file = e.target.files?.[0];
             e.target.value = "";
             if (!file) return;
-            if (!confirm("Importing replaces all data on this device. Continue?")) return;
+            const msg = syncConfigured
+              ? "Import this backup into your account? Its entries are added and synced; anything already in your account stays."
+              : "Importing replaces all data on this device. Continue?";
+            if (!confirm(msg)) return;
             try {
               const { days } = await db.importAll(JSON.parse(await file.text()));
               await onImported();

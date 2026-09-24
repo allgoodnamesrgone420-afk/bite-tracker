@@ -36,10 +36,25 @@ With Supabase connected, Bite has accounts and syncs across devices:
 3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to your production URL, and add `https://<your-domain>/**` and `http://localhost:3000/**` to **Redirect URLs** (for confirmation and password-reset links).
 4. Redeploy, open the site, choose **New account** with the owner email, confirm it from your inbox, and sign in.
 
+## AI providers
+
+Bring a key from any supported provider. Settings → AI shows what's active.
+
+| Key looks like | Provider | Defaults |
+|---|---|---|
+| `sk-…`, `sk-proj-…` | OpenAI (Responses API) | `gpt-6-luna` for text, photos and coach, `low` reasoning effort, `store: false` |
+| `sk-ant-…` | Anthropic | `claude-haiku-4-5` text, `claude-sonnet-5` photos and coach |
+| `AIza…` · `gsk_…` · `sk-or-…` · `xai-…` | Gemini · Groq · OpenRouter · xAI | set `LLM_MODEL` |
+| anything else | `LLM_PROVIDER=deepseek`, `mistral`, or `compatible` + `LLM_BASE_URL` | set `LLM_MODEL` |
+
+Every provider gets the same guarantees: schema-constrained JSON, Zod validation with one repair retry, a 20 s timeout, and the same error handling. `lib/llm/` has one adapter per API style (Anthropic Messages, OpenAI Responses, OpenAI-compatible Chat Completions), and nothing outside it knows which provider is in use. For photos, pick a model that accepts images.
+
+To switch: change `LLM_API_KEY` (plus `LLM_PROVIDER` / `LLM_MODEL` if needed) in Vercel → Settings → Environment Variables, then redeploy.
+
 ## Architecture
 
 - **Next.js 16 App Router + TypeScript + Tailwind v4 + Zod.** Client-rendered screens; three stateless route handlers: `/api/parse` (text), `/api/parse-photo` (vision) and `/api/coach`. The client owns all fallbacks (food library, built-in coach), so the server stays a thin, keyed proxy to the model.
-- **`lib/llm.ts`** is the only file that knows about the provider (Anthropic SDK). It exposes `callLLM({ model, system, messages, schema, maxTokens, temperature })`. It uses structured JSON-schema output, parses fences defensively, validates with Zod, retries once with the validation error appended, and returns a typed error. There's a 20 s wall clock, and the SDK retries 429/5xx once with backoff. Temperature and thinking settings are adjusted per model, because newer models reject `temperature`.
+- **`lib/llm/`** is the only code that knows about AI providers. `callLLM({ task, system, messages, schema, maxTokens, temperature })` picks the provider and model from env (`config.ts`), sends a strict JSON schema, parses fences defensively, validates with Zod, retries once with the validation error appended, and returns a typed error. There's a 20 s wall clock, and the SDKs retry 429/5xx once with backoff. Per-model quirks (temperature, thinking, effort) live in the adapters.
 - **`lib/server/guard.ts`** handles the optional `APP_PASSCODE` header check (constant-time), a per-IP token-bucket rate limit (20/min for parse), body-size limits and error mapping. **`lib/server/prompts.ts`** holds the static, cache-friendly system prompt. User text goes inside `<input>` tags with `<`/`>` neutralised.
 - **`lib/targets.ts`** is pure code: Mifflin-St Jeor → TDEE → goal adjustment (7,700 kcal/kg) → protein / fat / carbs / fibre. It enforces the 1,200 kcal (women) and 1,500 kcal (men) floors, caps loss at 1% of body weight per week, and returns every step for "How we calculated this".
 - **`lib/totals.ts`** sums totals, per-meal splits, remaining, macro split and streak. The LLM never does totals arithmetic.
@@ -60,10 +75,11 @@ Fill in `.env.local`:
 
 | Var | Purpose |
 |---|---|
-| `LLM_API_KEY` | Anthropic API key (server-only) |
-| `LLM_PARSER_MODEL` | defaults to `claude-haiku-4-5` |
-| `LLM_VISION_MODEL` | photo breakdowns, defaults to `claude-sonnet-5` |
-| `LLM_COACH_MODEL` | defaults to `claude-sonnet-5` |
+| `LLM_API_KEY` | Any supported provider's API key (server-only); the provider is inferred from the key |
+| `LLM_PROVIDER` | optional: `openai`, `anthropic`, `gemini`, `groq`, `openrouter`, `deepseek`, `xai`, `mistral`, `compatible` |
+| `LLM_MODEL` | optional: one model for all tasks; or per task `LLM_PARSER_MODEL`, `LLM_VISION_MODEL`, `LLM_COACH_MODEL` |
+| `LLM_REASONING_EFFORT` | optional: `none` … `max`, where the model supports it |
+| `LLM_BASE_URL` | required for `compatible` (any OpenAI-compatible endpoint) |
 | `APP_PASSCODE` | optional; if set, clients must send it (entered once, stored on device) |
 
 ```bash
