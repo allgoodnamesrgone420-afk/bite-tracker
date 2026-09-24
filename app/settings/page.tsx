@@ -1,0 +1,398 @@
+"use client";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useApp } from "@/components/AppProvider";
+import { Icon, PopButton, fmtInt } from "@/components/ui";
+import * as db from "@/lib/db";
+import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
+import { ProfileSchema, type Profile, type TargetOverrides } from "@/lib/schemas";
+import { computeTargets } from "@/lib/targets";
+
+type Draft = Record<keyof Profile, string>;
+const OVERRIDE_KEYS = ["calories", "protein_g", "carbs_g", "fat_g", "fibre_g"] as const;
+const OVERRIDE_LABEL = { calories: "Calories", protein_g: "Protein g", carbs_g: "Carbs g", fat_g: "Fat g", fibre_g: "Fibre g" };
+
+const toDraft = (p: Profile | null): Draft => ({
+  age: p ? String(p.age) : "",
+  sex: p?.sex ?? "female",
+  heightCm: p ? String(p.heightCm) : "",
+  weightKg: p ? String(p.weightKg) : "",
+  activity: p?.activity ?? "light",
+  goal: p?.goal ?? "lose",
+  rateKgPerWeek: p ? String(p.rateKgPerWeek) : "0.5",
+  diet: p?.diet ?? "",
+  healthNotes: p?.healthNotes ?? "",
+});
+
+function parseDraft(d: Draft) {
+  return ProfileSchema.safeParse({
+    ...d,
+    age: Number(d.age),
+    heightCm: Number(d.heightCm),
+    weightKg: Number(d.weightKg),
+    rateKgPerWeek: d.goal === "maintain" ? 0 : Number(d.rateKgPerWeek),
+  });
+}
+
+export default function SettingsPage() {
+  const { ready, profile, overrides } = useApp();
+  if (!ready) return <p className="label pulse pt-10">Loading…</p>;
+  // Keyed so the form re-initialises after an import.
+  return <SettingsForm key={JSON.stringify([profile, overrides])} profile={profile} overrides={overrides} />;
+}
+
+function SettingsForm({ profile, overrides }: { profile: Profile | null; overrides: TargetOverrides }) {
+  const { saveSettings, reloadAll } = useApp();
+  const [draft, setDraft] = useState<Draft>(() => toDraft(profile));
+  const [ov, setOv] = useState<Record<(typeof OVERRIDE_KEYS)[number], string>>(() =>
+    Object.fromEntries(OVERRIDE_KEYS.map((k) => [k, overrides[k] ? String(overrides[k]) : ""])) as Record<(typeof OVERRIDE_KEYS)[number], string>,
+  );
+  const [saved, setSaved] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
+
+  const parsed = parseDraft(draft);
+  const overrideValues: TargetOverrides = useMemo(
+    () => Object.fromEntries(OVERRIDE_KEYS.filter((k) => Number(ov[k]) > 0).map((k) => [k, Number(ov[k])])),
+    [ov],
+  );
+  const calc = parsed.success ? computeTargets(parsed.data, overrideValues) : null;
+  const fieldError = (k: keyof Profile) => (showErrors && !parsed.success ? parsed.error.issues.find((i) => i.path[0] === k)?.message : undefined);
+
+  const set = (k: keyof Profile) => (e: { target: { value: string } }) => {
+    setDraft((d) => ({ ...d, [k]: e.target.value }));
+    setSaved(false);
+  };
+
+  return (
+    <div className="space-y-6 pb-4">
+      <header>
+        <p className="label">Settings</p>
+        <h1 className="text-2xl font-extrabold tracking-tight">You &amp; your targets</h1>
+      </header>
+
+      <form
+        className="space-y-3"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setShowErrors(true);
+          if (!parsed.success) return;
+          await saveSettings(parsed.data, overrideValues);
+          setSaved(true);
+        }}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Age" error={fieldError("age")}>
+            <input inputMode="numeric" value={draft.age} onChange={set("age")} />
+          </Field>
+          <Field label="Sex (for BMR)">
+            <select value={draft.sex} onChange={set("sex")}>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+          </Field>
+          <Field label="Height (cm)" error={fieldError("heightCm")}>
+            <input inputMode="decimal" value={draft.heightCm} onChange={set("heightCm")} />
+          </Field>
+          <Field label="Weight (kg)" error={fieldError("weightKg")}>
+            <input inputMode="decimal" value={draft.weightKg} onChange={set("weightKg")} />
+          </Field>
+        </div>
+        <Field label="Activity">
+          <select value={draft.activity} onChange={set("activity")}>
+            <option value="sedentary">Sedentary · desk job, little exercise</option>
+            <option value="light">Light · exercise 1-3 days/week</option>
+            <option value="moderate">Moderate · exercise 3-5 days/week</option>
+            <option value="active">Active · hard exercise 6-7 days/week</option>
+          </select>
+        </Field>
+        <div className="grid grid-cols-[1.4fr_1fr] gap-3">
+          <Field label="Goal">
+            <select value={draft.goal} onChange={set("goal")}>
+              <option value="lose">Lose fat</option>
+              <option value="maintain">Maintain</option>
+              <option value="gain">Gain muscle</option>
+            </select>
+          </Field>
+          <Field label="Rate (kg/week)" error={fieldError("rateKgPerWeek")}>
+            <input inputMode="decimal" value={draft.goal === "maintain" ? "0" : draft.rateKgPerWeek} onChange={set("rateKgPerWeek")} disabled={draft.goal === "maintain"} />
+          </Field>
+        </div>
+        <Field label="Diet preferences & restrictions">
+          <input value={draft.diet} maxLength={300} onChange={set("diet")} placeholder="e.g. vegetarian, no mushrooms, North Indian" />
+        </Field>
+        <Field label="Health notes (optional)">
+          <input value={draft.healthNotes} maxLength={300} onChange={set("healthNotes")} placeholder="e.g. type 2 diabetes" />
+        </Field>
+
+        {calc && (
+          <section className="plunk face-card space-y-4 p-4" aria-live="polite">
+            <div className="flex items-end justify-between">
+              <div>
+                <p className="label">Daily target</p>
+                <p className="hero-num num mt-1 text-[56px]">{fmtInt(calc.targets.calories)}</p>
+                <p className="text-sm text-ink-2">kcal · maintenance {fmtInt(calc.tdee)}</p>
+              </div>
+              <div className="num space-y-0.5 text-right text-sm font-semibold">
+                <p className="text-protein">P {calc.targets.protein_g}g</p>
+                <p className="text-carbs">C {calc.targets.carbs_g}g</p>
+                <p className="text-fat">F {calc.targets.fat_g}g</p>
+                <p className="text-fibre">Fibre {calc.targets.fibre_g}g</p>
+              </div>
+            </div>
+            {calc.warnings.map((w) => (
+              <p key={w} role="alert" className="flex gap-2 border border-warn/60 bg-warn/10 p-3 text-sm">
+                <span className="text-warn">
+                  <Icon.alert size={18} />
+                </span>
+                {w}
+              </p>
+            ))}
+            <details className="group border-t border-line pt-3">
+              <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-bold uppercase tracking-[0.1em]">
+                How we calculated this
+                <span className="text-ink-3 transition-transform group-open:rotate-180">
+                  <Icon.chevron size={16} />
+                </span>
+              </summary>
+              <ol className="mt-3 space-y-2">
+                {calc.steps.map((s) => (
+                  <li key={s.label} className="border-l-2 border-line pl-3">
+                    <p className="flex justify-between gap-2 text-sm font-semibold">
+                      {s.label} <span className="num">{s.value}</span>
+                    </p>
+                    <p className="num text-xs text-ink-2">{s.math}</p>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-3 text-xs text-ink-2">
+                Safety floors: never below 1,200 kcal (women) / 1,500 kcal (men); fat loss capped at 1% of body weight per week. General guidance, not medical advice.
+              </p>
+            </details>
+          </section>
+        )}
+
+        <details className="card group p-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between text-xs font-bold uppercase tracking-[0.1em]">
+            Manual overrides
+            <span className="text-ink-3 transition-transform group-open:rotate-180">
+              <Icon.chevron size={16} />
+            </span>
+          </summary>
+          <p className="mt-2 text-xs text-ink-2">Leave blank to use the calculated value. Calorie overrides still respect the safety floor.</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {OVERRIDE_KEYS.map((k) => (
+              <Field key={k} label={OVERRIDE_LABEL[k]} compact>
+                <input
+                  inputMode="decimal"
+                  value={ov[k]}
+                  placeholder="auto"
+                  onChange={(e) => {
+                    setOv((o) => ({ ...o, [k]: e.target.value.replace(/[^\d.]/g, "") }));
+                    setSaved(false);
+                  }}
+                />
+              </Field>
+            ))}
+          </div>
+        </details>
+
+        <PopButton type="submit" block>
+          {saved ? (
+            <>
+              <Icon.check size={18} /> Saved
+            </>
+          ) : (
+            "Save profile"
+          )}
+        </PopButton>
+      </form>
+
+      <AppearanceSection />
+      <MyFoodsSection />
+      <PasscodeSection />
+      <BackupSection onImported={reloadAll} />
+    </div>
+  );
+}
+
+function Field({ label, error, compact, children }: { label: string; error?: string; compact?: boolean; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className={`field ${compact ? "compact" : ""}`}>
+        <span>{label}</span>
+        {children}
+      </label>
+      {error && (
+        <p className="mt-1 flex items-center gap-1 text-xs text-over">
+          <Icon.alert size={12} /> {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+const subscribeTheme = (cb: () => void) => {
+  window.addEventListener("bite-theme", cb);
+  return () => window.removeEventListener("bite-theme", cb);
+};
+
+function AppearanceSection() {
+  const pref = useSyncExternalStore(subscribeTheme, getThemePref, () => "system" as ThemePref);
+  const options: { v: ThemePref; label: string }[] = [
+    { v: "system", label: "System" },
+    { v: "light", label: "Light" },
+    { v: "dark", label: "Dark" },
+  ];
+  return (
+    <section className="card space-y-3 p-4">
+      <p className="label">Appearance</p>
+      <div className="segmented" role="group" aria-label="Theme">
+        {options.map((o) => (
+          <button
+            key={o.v}
+            type="button"
+            aria-pressed={pref === o.v}
+            onClick={() => setThemePref(o.v)}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function MyFoodsSection() {
+  const { myFoods, forgetFood } = useApp();
+  const [showAll, setShowAll] = useState(false);
+  const list = Object.values(myFoods).sort((a, b) => Number(b.verified) - Number(a.verified) || b.uses - a.uses);
+  const shown = showAll ? list : list.slice(0, 8);
+  return (
+    <section className="card space-y-3 p-4">
+      <div>
+        <p className="label">My foods</p>
+        <p className="mt-1 text-xs text-ink-2">
+          Everything you log is remembered, so it parses instantly next time. Edit the numbers when you log a food and it becomes{" "}
+          <span className="font-semibold text-ok">calibrated</span>: your values win over the library and AI from then on.
+        </p>
+      </div>
+      {list.length === 0 ? (
+        <p className="text-sm text-ink-3">Nothing yet. Log a few meals.</p>
+      ) : (
+        <ul className="divide-y divide-line-soft border-y border-line-soft">
+          {shown.map((f) => (
+            <li key={f.key} className="flex items-center gap-2 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2 truncate text-sm font-semibold">
+                  {f.name}
+                  {f.verified && <span className="tag text-ok">Calibrated</span>}
+                </p>
+                <p className="num text-xs text-ink-2">
+                  per {f.unit}: {Math.round(f.per[0])} kcal · P {f.per[1]} · C {f.per[2]} · F {f.per[3]} · logged {f.uses}×
+                </p>
+              </div>
+              <button onClick={() => forgetFood(f.key)} className="flex h-9 w-9 items-center justify-center text-ink-3 hover:text-over" aria-label={`Forget ${f.name}`}>
+                <Icon.trash size={16} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {list.length > 8 && (
+        <button className="text-xs font-bold uppercase tracking-[0.1em] text-ink-2" onClick={() => setShowAll((s) => !s)}>
+          {showAll ? "Show fewer" : `Show all ${list.length}`}
+        </button>
+      )}
+    </section>
+  );
+}
+
+function PasscodeSection() {
+  const [code, setCode] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  useEffect(() => {
+    void db.getPasscode().then((p) => p && setCode(p));
+  }, []);
+  return (
+    <section className="card space-y-3 p-4">
+      <div>
+        <p className="label">App passcode</p>
+        <p className="mt-1 text-xs text-ink-2">Only needed if the server sets APP_PASSCODE. Stored on this device.</p>
+      </div>
+      <div className="flex gap-2">
+        <label className="field compact flex-1">
+          <span>Passcode</span>
+          <input type="password" autoComplete="off" value={code} onChange={(e) => setCode(e.target.value)} />
+        </label>
+        <PopButton
+          variant="ghost"
+          onClick={async () => {
+            await db.savePasscode(code);
+            setStatus(code ? "Saved" : "Cleared");
+          }}
+        >
+          Save
+        </PopButton>
+      </div>
+      {status && <p className="text-xs text-ok" role="status">{status}</p>}
+    </section>
+  );
+}
+
+function BackupSection({ onImported }: { onImported: () => Promise<void> }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  return (
+    <section className="card space-y-3 p-4">
+      <div>
+        <p className="label">Backup</p>
+        <p className="mt-1 text-xs text-ink-2">Everything lives in this browser. Export a JSON file now and then.</p>
+      </div>
+      <div className="flex gap-3">
+        <PopButton
+          variant="ghost"
+          block
+          onClick={async () => {
+            const data = await db.exportAll();
+            const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `bite-backup-${data.exportedAt.slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            setMsg({ ok: true, text: `Exported ${data.days.length} day${data.days.length === 1 ? "" : "s"}.` });
+          }}
+        >
+          Export
+        </PopButton>
+        <PopButton variant="ghost" block onClick={() => fileRef.current?.click()}>
+          Import
+        </PopButton>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          aria-label="Import backup file"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            if (!confirm("Importing replaces all data on this device. Continue?")) return;
+            try {
+              const { days } = await db.importAll(JSON.parse(await file.text()));
+              await onImported();
+              setMsg({ ok: true, text: `Imported ${days} day${days === 1 ? "" : "s"}.` });
+            } catch {
+              setMsg({ ok: false, text: "That file isn't a valid Bite backup." });
+            }
+          }}
+        />
+      </div>
+      {msg && (
+        <p role="status" className={`text-xs ${msg.ok ? "text-ok" : "text-over"}`}>
+          {msg.text}
+        </p>
+      )}
+    </section>
+  );
+}

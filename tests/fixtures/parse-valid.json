@@ -1,0 +1,9 @@
+{
+  "items": [
+    { "name": "Roti", "quantity": 2, "unit": "piece", "meal": "lunch", "calories": 220, "protein_g": 7, "carbs_g": 40, "fat_g": 3, "fibre_g": 6, "confidence": "high", "assumed": false, "notes": "" },
+    { "name": "Dal (tempered)", "quantity": 1, "unit": "bowl", "meal": "lunch", "calories": 190, "protein_g": 9, "carbs_g": 24, "fat_g": 6, "fibre_g": 5, "confidence": "medium", "assumed": false, "notes": "Assumed 1 tsp ghee tadka" },
+    { "name": "Curd", "quantity": 1, "unit": "small bowl", "meal": "lunch", "calories": 90, "protein_g": 5, "carbs_g": 6, "fat_g": 5, "fibre_g": 0, "confidence": "high", "assumed": false, "notes": "" }
+  ],
+  "needs_clarification": null,
+  "suggested_answers": []
+}
