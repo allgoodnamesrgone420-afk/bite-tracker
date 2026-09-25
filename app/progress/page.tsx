@@ -8,7 +8,7 @@ import { foodKey } from "@/lib/calibration";
 import * as db from "@/lib/db";
 import { MEAL_STYLE } from "@/lib/meal-style";
 import { MICRO_KEYS, MICRO_META, microStatus, microTargets } from "@/lib/micros";
-import { STATUS_META, classifyDay, lastNDates, monthGrid, rangeStats, targetStreak, type DayRow, type DayStatus } from "@/lib/progress";
+import { STATUS_META, classifyDay, lastNDates, monthGrid, rangeStats, targetStreakInfo, type DayRow, type DayStatus } from "@/lib/progress";
 import { MEALS, type DayLog, type Profile } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
 import { addDays, sumItems } from "@/lib/totals";
@@ -60,7 +60,9 @@ function Progress({ rows, fallback, today, selected, onSelect, sex }: { rows: Re
   const range: Range = picked ?? (desktop ? 30 : 14);
   const dates = useMemo(() => lastNDates(today, range), [today, range]);
   const stats = rangeStats(rows, dates, fallback);
-  const streakDays = targetStreak(rows, today, fallback);
+  const streak = targetStreakInfo(rows, today, fallback);
+  const streakDays = streak.days;
+  const frozen = useMemo(() => new Set(streak.frozen), [streak.frozen]);
   const logged = stats.logged;
   const days = useRangeDays(dates, rows);
 
@@ -68,6 +70,9 @@ function Progress({ rows, fallback, today, selected, onSelect, sex }: { rows: Re
     <div className="stagger space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3" style={{ ["--i" as string]: 0 }}>
         <Title />
+        <Link href="/week" className="pop-btn sm ghost order-last sm:order-none">
+          Weekly report card →
+        </Link>
         <div className="segmented w-full sm:w-auto" role="group" aria-label="Range">
           {RANGES.map((r) => (
             <button key={r} type="button" aria-pressed={range === r} onClick={() => setPicked(r)} className="px-4">
@@ -82,6 +87,9 @@ function Progress({ rows, fallback, today, selected, onSelect, sex }: { rows: Re
           <p className="text-[11px] font-bold uppercase tracking-[0.1em] opacity-80">On-target streak</p>
           <p className="hero-num num mt-2 text-[64px]">{streakDays}</p>
           <p className="mt-1 text-xs font-semibold opacity-80">{streakDays === 1 ? "day" : "days"} in a row</p>
+          <p className="mt-2 flex items-center gap-1 text-[11px] font-semibold opacity-70">
+            <Icon.snow size={12} /> {streak.frozen.length ? `${streak.frozen.length} missed day${streak.frozen.length === 1 ? "" : "s"} forgiven` : "1 miss a week is forgiven"}
+          </p>
         </div>
         <div className="grid grid-rows-3 gap-2">
           <MiniStat status="hit" n={stats.hit} of={logged} />
@@ -131,7 +139,7 @@ function Progress({ rows, fallback, today, selected, onSelect, sex }: { rows: Re
       </div>
 
       <div className="space-y-6 lg:grid lg:grid-cols-3 lg:items-start lg:gap-6 lg:space-y-0">
-        <Calendar rows={rows} fallback={fallback} today={today} selected={selected} onSelect={onSelect} />
+        <Calendar rows={rows} fallback={fallback} today={today} selected={selected} onSelect={onSelect} frozen={frozen} />
         <DayDetail date={selected} row={rows[selected]} fallback={fallback} today={today} />
         <div className="space-y-6">
           <AvgSplit rows={rows} dates={dates} range={range} />
@@ -542,7 +550,7 @@ function BarChart({ rows, dates, fallback, selected, onSelect }: { rows: Record<
 
 /* -------------------------------- calendar -------------------------------- */
 
-function Calendar({ rows, fallback, today, selected, onSelect }: { rows: Record<string, DayRow>; fallback: Targets; today: string; selected: string; onSelect: (d: string) => void }) {
+function Calendar({ rows, fallback, today, selected, onSelect, frozen }: { rows: Record<string, DayRow>; fallback: Targets; today: string; selected: string; onSelect: (d: string) => void; frozen: Set<string> }) {
   const [ym, setYm] = useState(() => ({ y: Number(today.slice(0, 4)), m: Number(today.slice(5, 7)) - 1 }));
   const weeks = monthGrid(ym.y, ym.m);
   const monthDates = weeks.flat().filter((d): d is string => !!d && d <= today);
@@ -585,7 +593,7 @@ function Calendar({ rows, fallback, today, selected, onSelect }: { rows: Record<
               disabled={future}
               onClick={() => onSelect(d)}
               aria-pressed={isSel}
-              aria-label={`${fmtDate(d, { weekday: "long", day: "numeric", month: "long" })}: ${c ? STATUS_META[c.status].label : future ? "upcoming" : "nothing logged"}`}
+              aria-label={`${fmtDate(d, { weekday: "long", day: "numeric", month: "long" })}: ${c ? STATUS_META[c.status].label : future ? "upcoming" : "nothing logged"}${frozen.has(d) ? ", streak freeze" : ""}`}
               className={`relative flex aspect-square flex-col items-center justify-center text-xs font-bold ${c ? "text-[#0d0d0d]" : future ? "text-ink-3/40" : "border border-line-soft text-ink-3"} ${c?.status === "over" ? "hatch" : ""} ${
                 isSel ? "outline-2 outline-offset-1 outline-ink" : ""
               } ${d === today && !isSel ? "ring-1 ring-ink ring-inset" : ""}`}
@@ -593,6 +601,11 @@ function Calendar({ rows, fallback, today, selected, onSelect }: { rows: Record<
             >
               <span className="num">{Number(d.slice(8))}</span>
               {c && <span className="text-[10px] leading-none" aria-hidden="true">{STATUS_META[c.status].glyph}</span>}
+              {frozen.has(d) && (
+                <span className="text-under" aria-hidden="true" title="Streak freeze">
+                  <Icon.snow size={10} />
+                </span>
+              )}
             </button>
           );
         })}

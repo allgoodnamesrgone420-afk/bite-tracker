@@ -1,7 +1,7 @@
 /** Pure progress-tracking logic: day status vs targets, macro flags, calendar and streaks. */
 import type { Micros } from "./schemas";
 import type { Targets } from "./targets";
-import { addDays, dateKey, type Nutrients } from "./totals";
+import { addDays, dateKey, streakWithFreeze, type Nutrients, type StreakInfo } from "./totals";
 
 export type DayStatus = "hit" | "over" | "under" | "low";
 export type MacroKey = keyof Nutrients;
@@ -67,6 +67,14 @@ export function targetStreak(rows: Record<string, DayRow>, today: string, fallba
     cursor = addDays(cursor, -1);
   }
   return n;
+}
+
+/** On-target streak with the weekly streak freeze (see streakWithFreeze). */
+export function targetStreakInfo(rows: Record<string, DayRow>, today: string, fallback: Targets): StreakInfo {
+  return streakWithFreeze((d) => {
+    const r = rows[d];
+    return !!r && r.count > 0 && classifyDay(r, r.target ?? fallback).status === "hit";
+  }, today);
 }
 
 export type RangeStats = {

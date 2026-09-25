@@ -211,6 +211,11 @@ export const Icon = {
       <path d="M4 20h4L19 9l-4-4L4 16zM13 7l4 4" />
     </Svg>
   ),
+  snow: (p: { size?: number }) => (
+    <Svg {...p}>
+      <path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5L12 7l2.5-2.5M9.5 19.5L12 17l2.5 2.5" />
+    </Svg>
+  ),
   stop: (p: { size?: number }) => (
     <Svg {...p}>
       <path d="M7 7h10v10H7z" />

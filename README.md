@@ -22,6 +22,11 @@ Describe what you ate ("2 rotis, a bowl of dal and a small bowl of curd at lunch
 - **Adaptive maintenance** (`lib/weight.ts`). With at least 10 fully logged days and 4 weigh-ins spread over 10+ days in the last 4 weeks, Bite estimates what you actually burn: average intake minus the energy implied by your weight trend (7,700 kcal/kg). Days under half your target are skipped as incomplete. The estimate is clamped to ±25% of the formula and blended with it until confidence is high. Targets use it when **Adapt to my data** is on (Settings, default on); the 1,200/1,500 kcal floors and the 1%/week loss cap still apply.
 - **Micronutrients.** Sodium (under 2,000 mg), sugar and saturated fat (under 10% of calories each), calcium (1,000 mg) and iron (19 mg men / 29 mg women, ICMR-NIN 2020). Items logged before micronutrients were added don't have them, so every total shows its coverage.
 
+## Streaks and the weekly report card
+
+- **Streak freeze.** One missed day per Monday-Sunday week is forgiven, for both the logging streak on Today and the on-target streak on Progress, as long as the streak continues on the other side. Forgiven days show a snowflake in the calendar.
+- **Weekly report card** (`/week`, `lib/report.ts`): days on target, a 7-day strip, average calories and protein vs last week, weight-trend change, sodium days, biggest calorie sources, best and toughest day, and one focus for next week. It's computed on your device. From Sunday to Tuesday, Today shows a banner when it's ready. Share it as text from the page.
+
 ## Coach chat
 
 Ask anything ("plan my dinner", "why am I not losing weight?"). To keep it cheap:
@@ -120,7 +125,7 @@ Without a key the app still works: the food library, your calibrated foods, Prog
 
 1. Push the repo and import it in Vercel.
 2. In Project → Settings → Environment Variables, add `LLM_API_KEY`, `LLM_PARSER_MODEL`, `LLM_VISION_MODEL`, `LLM_COACH_MODEL` and optionally `APP_PASSCODE`.
-3. Deploy. The route handlers run on the Node.js runtime. With Supabase connected, rate limits live in Postgres; `npm install` copies the barcode decoder into `public/vendor/` (postinstall).
+3. Deploy. The route handlers run on the Node.js runtime. `vercel.json` schedules a daily cron at `/api/keepalive`, which runs one tiny read against Supabase so a free project is never paused for inactivity. Optional: set `CRON_SECRET` in Vercel so only Vercel's cron can call it. With Supabase connected, rate limits live in Postgres; `npm install` copies the barcode decoder into `public/vendor/` (postinstall).
 
 ## Install as an app (PWA)
 

@@ -95,3 +95,39 @@ export function mealForTime(d: Date = new Date()): Meal {
   if (mins >= 15 * 60 + 30 && mins < 19 * 60) return "snack";
   return "dinner";
 }
+
+/** Monday of the week containing `key` (weeks run Monday to Sunday). */
+export function weekStart(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const dow = (new Date(y, m - 1, d).getDay() + 6) % 7;
+  return dateKey(new Date(y, m - 1, d - dow));
+}
+
+export type StreakInfo = { days: number; frozen: string[] };
+
+/**
+ * Consecutive good days ending today (or yesterday while today is still in
+ * progress), with a streak freeze: one missed day per Monday-Sunday week is
+ * forgiven, as long as the streak carries on the other side of it. Frozen
+ * days don't add to the count.
+ */
+export function streakWithFreeze(ok: (date: string) => boolean, today: string, maxDays = 3650): StreakInfo {
+  let cursor = ok(today) ? today : addDays(today, -1);
+  let days = 0;
+  const frozen: string[] = [];
+  const usedWeeks = new Set<string>();
+  for (let i = 0; i < maxDays; i++) {
+    if (ok(cursor)) {
+      days++;
+      cursor = addDays(cursor, -1);
+      continue;
+    }
+    const week = weekStart(cursor);
+    const before = addDays(cursor, -1);
+    if (usedWeeks.has(week) || !ok(before)) break;
+    usedWeeks.add(week);
+    frozen.push(cursor);
+    cursor = before;
+  }
+  return { days, frozen };
+}

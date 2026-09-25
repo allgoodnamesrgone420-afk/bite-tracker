@@ -10,7 +10,8 @@ import * as db from "@/lib/db";
 import { STATUS_META, classifyDay, lastNDates } from "@/lib/progress";
 import { MEALS, ParsedItemSchema, type DayLog, type LogItem, type Meal } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
-import { addDays, byMeal, macroSplit, mealForTime, remaining, streak, sumItems } from "@/lib/totals";
+import { defaultReportWeek, weekDates } from "@/lib/report";
+import { addDays, byMeal, macroSplit, mealForTime, remaining, streakWithFreeze, sumItems, weekStart } from "@/lib/totals";
 
 export default function TodayPage() {
   const { ready, day, today, summaries, calc, pending, profile } = useApp();
@@ -26,7 +27,8 @@ export default function TodayPage() {
 
   const consumed = sumItems(day.items);
   const targets = calc?.targets ?? null;
-  const days = streak(Object.keys(summaries), today);
+  const st = streakWithFreeze((d) => !!summaries[d]?.count, today);
+  const frozenThisWeek = st.frozen.some((d) => d >= weekStart(today));
   const groups = byMeal(day.items);
   const dateObj = new Date(`${today}T00:00`);
   const dateShort = dateObj.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
@@ -59,14 +61,24 @@ export default function TodayPage() {
             <span className="hidden lg:inline">{dateLong}</span>
           </h1>
         </div>
-        {days > 0 && (
-          <span className="plunk face-yellow flex shrink-0 items-center gap-1 px-2.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]" style={{ ["--d" as string]: "3px" }}>
-            <Icon.flame size={14} /> {days} day streak
+        {st.days > 0 && (
+          <span
+            className="plunk face-yellow flex shrink-0 items-center gap-1 px-2.5 py-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]"
+            style={{ ["--d" as string]: "3px" }}
+            title={frozenThisWeek ? "Streak freeze used this week: one missed day a week is forgiven" : "One missed day a week won't break it"}
+          >
+            <Icon.flame size={14} /> {st.days} day streak
+            {frozenThisWeek && (
+              <span className="ml-0.5 flex items-center" aria-label="streak freeze used this week">
+                <Icon.snow size={13} />
+              </span>
+            )}
           </span>
         )}
       </header>
 
       <NamePrompt />
+      <WeekBanner today={today} />
 
       <div className="space-y-5 lg:grid lg:grid-cols-2 lg:items-start lg:gap-6 lg:space-y-0 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         <div className="space-y-5">
@@ -159,6 +171,45 @@ function NamePrompt() {
         <Icon.close size={16} />
       </button>
     </form>
+  );
+}
+
+/** Sunday to Tuesday: "your week in review is ready", once per week. */
+const WEEK_KEY = "bite-week-seen";
+const readSeen = () => {
+  try {
+    return localStorage.getItem(WEEK_KEY) ?? "";
+  } catch {
+    return "";
+  }
+};
+
+function WeekBanner({ today }: { today: string }) {
+  const { summaries } = useApp();
+  const seen = useSyncExternalStore(noopSub, readSeen, () => "server");
+  const [hidden, setHidden] = useState(false);
+  const week = defaultReportWeek(today);
+  const dow = new Date(`${today}T00:00`).getDay(); // 0 = Sunday
+  const logged = weekDates(week).filter((d) => summaries[d]?.count).length;
+  if (hidden || seen === week || seen === "server" || ![0, 1, 2].includes(dow) || logged < 2) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(WEEK_KEY, week);
+    } catch {
+      /* private mode */
+    }
+    setHidden(true);
+  };
+  return (
+    <div className="plunk face-violet flex items-center gap-3 p-3" style={{ ["--d" as string]: "4px" }}>
+      <Link href="/week" onClick={dismiss} className="min-w-0 flex-1">
+        <span className="block text-[11px] font-bold uppercase tracking-[0.1em] opacity-80">{dow === 0 ? "This week" : "Last week"}</span>
+        <span className="block font-extrabold">Your weekly report card is ready →</span>
+      </Link>
+      <button onClick={dismiss} className="flex h-9 w-9 shrink-0 items-center justify-center" aria-label="Dismiss">
+        <Icon.close size={16} />
+      </button>
+    </div>
   );
 }
 

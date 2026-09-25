@@ -206,7 +206,7 @@ export function computeInsights({ today, days, targets: t, profile, now = new Da
       id: "sodium",
       tone: "warn",
       title: `Sodium over ${naLimit.toLocaleString("en-IN")} mg on ${salty.length} of ${naDays.length} days`,
-      detail: `Averaging ~${avg.toLocaleString("en-IN")} mg on those days.${top.length ? ` Biggest sources: ${top.map((f) => `${f.name} (~${Math.round(f.na / f.n)} mg each)`).join(", ")}.` : ""} Go easy on pickles, papad, namkeen and packaged snacks, and taste before adding salt.`,
+      detail: `Averaging ~${avg.toLocaleString("en-IN")} mg on those days.${top.length ? ` Biggest sources: ${top.map((f) => `${f.name} (~${Math.round(f.na / f.n).toLocaleString("en-IN")} mg each)`).join(", ")}.` : ""} Go easy on pickles, papad, namkeen and packaged snacks, and taste before adding salt.`,
       weight: 28,
     });
   }
