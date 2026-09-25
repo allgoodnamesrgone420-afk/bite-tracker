@@ -83,6 +83,8 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
   const chips = topFoods(myFoods, variant === "top" ? 10 : 8);
   const busy = !!pending;
   const voice = useVoice(setText);
+  // Mic and camera step aside once you're typing, so the text has room.
+  const tools = !text.trim() || voice.listening;
 
   // Desktop: "/" jumps to the food box from anywhere.
   useEffect(() => {
@@ -98,10 +100,16 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
   }, [variant]);
 
   const chipRow = chips.length > 0 && (
-    <div className={`no-scrollbar flex gap-2 overflow-x-auto ${variant === "dock" ? "px-5 pb-1 pt-2.5" : "pt-2"}`} role="group" aria-label="Quick add your usual foods">
+    <div className={`no-scrollbar flex gap-1.5 overflow-x-auto ${variant === "dock" ? "px-4 pt-2" : "pt-2"}`} role="group" aria-label="Quick add your usual foods">
       {chips.map((f) => (
-        <button key={f.key} type="button" className="chip shrink-0 !min-h-8 !text-xs" onClick={() => quickAdd(f.key)} aria-label={`Quick add ${f.name}, ${f.lastQty ?? 1} ${f.unit}`}>
-          <Icon.plus size={12} />
+        <button
+          key={f.key}
+          type="button"
+          className="chip shrink-0 !min-h-7 !gap-1 !px-2 !text-[11px] !shadow-[1px_1px_0_var(--shadow)]"
+          onClick={() => quickAdd(f.key)}
+          aria-label={`Quick add ${f.name}, ${f.lastQty ?? 1} ${f.unit}`}
+        >
+          <Icon.plus size={10} />
           {f.name.replace(/\s*\(.*?\)/, "")}
           <span className="font-normal text-ink-3">
             {f.lastQty ?? 1} {f.unit}
@@ -115,7 +123,7 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
     <>
       {variant === "dock" && chipRow}
       <form
-        className={`flex items-stretch gap-2 ${variant === "dock" ? "px-5 pt-3" : ""}`}
+        className={`flex items-stretch gap-1.5 ${variant === "dock" ? "px-4 pt-2" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
           voice.stop();
@@ -128,7 +136,7 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
         <button
           type="button"
           onClick={() => setSheet({ kind: "add", text: text.trim() })}
-          className="mb-1 flex w-12 shrink-0 items-center justify-center border border-line bg-surface text-ink-2 hover:text-ink"
+          className="mb-1 flex w-11 shrink-0 items-center justify-center border border-line bg-surface text-ink-2 hover:text-ink"
           aria-label="More ways to add: manual, barcode, saved meals"
           title="Manual entry, barcode, saved meals"
         >
@@ -141,34 +149,34 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             maxLength={PARSE_MAX_CHARS}
-            placeholder={voice.listening ? "Listening…" : online ? (variant === "top" ? "What did you eat?  (press / to jump here)" : "What did you eat?") : "Offline: tap + to add manually"}
+            placeholder={voice.listening ? "Listening…" : online ? (variant === "top" ? "What did you eat?  (press / to jump here)" : "What did you eat?") : "Offline: tap +"}
             enterKeyHint="send"
             autoComplete="off"
-            className={`mb-1 h-12 w-full border border-line bg-surface pl-3 text-base text-ink placeholder:text-ink-3 focus:border-ink focus:shadow-[3px_3px_0_var(--lime)] focus:outline-none ${voice.supported ? "pr-[88px]" : "pr-12"}`}
+            className={`mb-1 h-12 w-full border border-line bg-surface pl-3 text-base text-ink placeholder:text-ink-3 focus:border-ink focus:shadow-[3px_3px_0_var(--lime)] focus:outline-none ${!tools ? "pr-3" : voice.supported ? "pr-[76px]" : "pr-10"}`}
           />
-          <span className="absolute right-1 top-1 flex">
+          <span className={`absolute right-1 top-1 ${tools ? "flex" : "hidden"}`}>
             {voice.supported && (
               <button
                 type="button"
                 onClick={() => (voice.listening ? voice.stop() : voice.start())}
                 disabled={busy}
-                className={`flex h-10 w-10 items-center justify-center disabled:opacity-40 ${voice.listening ? "pulse bg-lime text-on-accent" : "text-ink-2 hover:text-ink"}`}
+                className={`flex h-10 w-9 items-center justify-center disabled:opacity-40 ${voice.listening ? "pulse bg-lime text-on-accent" : "text-ink-2 hover:text-ink"}`}
                 aria-label={voice.listening ? "Stop listening" : "Say what you ate"}
                 aria-pressed={voice.listening}
                 title="Speak instead of typing"
               >
-                {voice.listening ? <Icon.stop size={18} /> : <Icon.mic size={20} />}
+                {voice.listening ? <Icon.stop size={16} /> : <Icon.mic size={19} />}
               </button>
             )}
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
               disabled={busy || !online}
-              className="flex h-10 w-10 items-center justify-center text-ink-2 hover:text-ink disabled:opacity-40"
+              className="flex h-10 w-9 items-center justify-center text-ink-2 hover:text-ink disabled:opacity-40"
               aria-label="Log food from a photo"
               title="Snap your plate"
             >
-              <Icon.camera size={20} />
+              <Icon.camera size={19} />
             </button>
           </span>
           <input
@@ -196,7 +204,7 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
         </label>
         <button
           type="submit"
-          className="pop-btn lime w-12 !px-0"
+          className="pop-btn lime w-11 !px-0"
           disabled={busy || (online && !text.trim())}
           aria-label={online ? "Log food" : "Add manually (offline)"}
           onClick={() => navigator.vibrate?.(10)}
@@ -204,7 +212,8 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
           <Icon.send />
         </button>
       </form>
-      <div className={`h-5 pt-1 ${variant === "dock" ? "px-5" : ""}`} aria-live="polite">
+      {/* Status line only takes space when there's something to say. */}
+      <div className={`min-h-1.5 [&>p]:pb-1 [&>p]:pt-0.5 ${variant === "dock" ? "px-4" : ""}`} aria-live="polite">
         {busy ? (
           <p className="pulse text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-2">{pending?.photo ? "Reading your plate…" : "Crunching the numbers…"}</p>
         ) : voice.error ? (

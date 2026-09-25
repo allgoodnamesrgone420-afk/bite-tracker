@@ -368,10 +368,8 @@ function StatTiles({ consumed, target }: { consumed: Targets; target: Targets })
                 {s.label}
                 {over && <span className="text-over" aria-label="over target">↑</span>}
               </p>
-              <p className="num mt-1 text-2xl font-extrabold tracking-tight">
-                {fmtG(s.v)}
-                <span className="text-sm font-semibold text-ink-3"> / {s.t}g</span>
-              </p>
+              <p className="num mt-1 text-2xl font-extrabold tracking-tight">{fmtG(s.v)}</p>
+              <p className="num whitespace-nowrap text-xs font-semibold text-ink-3">of {s.t} g</p>
               <Progress value={s.v} max={s.t} color={s.color} label={`${s.label} progress`} />
             </div>
           );
