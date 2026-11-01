@@ -1,5 +1,5 @@
 "use client";
-import { getPasscode } from "./db";
+import { getAIPref, getPasscode } from "./db";
 import { accessToken } from "./supabase";
 import type { ApiResponse, BarcodeResult, ChatReply, ChatRequest, CoachRequest, CoachResult, Meal, ParseRequest, ParseResponse, PhotoParseRequest } from "./schemas";
 
@@ -9,7 +9,7 @@ async function post<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     return { ok: false, error: { code: "offline", message: "You're offline. Manual entry still works." } };
   }
-  const [passcode, token] = await Promise.all([getPasscode(), accessToken()]);
+  const [passcode, token, ai] = await Promise.all([getPasscode(), accessToken(), getAIPref()]);
   try {
     const res = await fetch(path, {
       method: "POST",
@@ -17,6 +17,8 @@ async function post<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(passcode ? { "x-app-passcode": passcode } : {}),
+        ...(ai.model ? { "x-ai-model": ai.model } : {}),
+        ...(ai.effort ? { "x-ai-effort": ai.effort } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(CLIENT_TIMEOUT_MS),
@@ -33,7 +35,7 @@ async function post<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
   }
 }
 
-export type AIStatus = { configured: boolean; provider?: string; models?: Record<"parse" | "vision" | "coach", string>; effort?: string; problem?: string };
+export type AIStatus = { configured: boolean; provider?: string; models?: Record<"parse" | "vision" | "coach", string>; effort?: string; choices?: string[]; problem?: string };
 
 export async function apiAIStatus(): Promise<AIStatus | null> {
   if (typeof navigator !== "undefined" && !navigator.onLine) return null;

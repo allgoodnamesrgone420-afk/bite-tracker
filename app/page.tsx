@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { useApp } from "@/components/AppProvider";
 import { BarList, Donut } from "@/components/charts";
 import { MicrosCard } from "@/components/MicrosCard";
+import { WaterCard } from "@/components/WaterCard";
 import { ConfidenceDot, Icon, fmtG, fmtInt, useCountUp } from "@/components/ui";
 import { MEAL_STYLE } from "@/lib/meal-style";
 import * as db from "@/lib/db";
@@ -11,7 +12,7 @@ import { STATUS_META, classifyDay, lastNDates } from "@/lib/progress";
 import { MEALS, ParsedItemSchema, type DayLog, type LogItem, type Meal } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
 import { defaultReportWeek, weekDates } from "@/lib/report";
-import { addDays, byMeal, macroSplit, mealForTime, remaining, streakWithFreeze, sumItems, weekStart } from "@/lib/totals";
+import { DAY_START_HOUR, addDays, byMeal, macroSplit, mealForTime, remaining, streakWithFreeze, sumItems, weekStart } from "@/lib/totals";
 
 export default function TodayPage() {
   const { ready, day, today, summaries, calc, pending, profile } = useApp();
@@ -33,6 +34,7 @@ export default function TodayPage() {
   const dateObj = new Date(`${today}T00:00`);
   const dateShort = dateObj.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
   const dateLong = dateObj.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
+  const lateNight = new Date().getHours() < DAY_START_HOUR;
 
   const meals = (
     <section aria-label="Meals" className="space-y-3">
@@ -60,6 +62,7 @@ export default function TodayPage() {
             <span className="lg:hidden">{dateShort}</span>
             <span className="hidden lg:inline">{dateLong}</span>
           </h1>
+          {lateNight && <p className="mt-0.5 text-[11px] text-ink-2">Late-night bites count toward this day until {DAY_START_HOUR} am.</p>}
         </div>
         {st.days > 0 && (
           <span
@@ -97,6 +100,7 @@ export default function TodayPage() {
               <p className="mt-1 font-bold">Add your profile to get calorie and macro targets →</p>
             </Link>
           )}
+          <WaterCard date={today} weightKg={calc?.weightKg} index={4} />
         </div>
         <div className="space-y-5">
           {targets && (
@@ -112,9 +116,7 @@ export default function TodayPage() {
               <div className="lg:hidden">
                 <MicrosCard items={day.items} calories={targets.calories} sex={profile?.sex} />
               </div>
-              <div className="hidden lg:block">
-                <WeekStrip today={today} fallback={targets} />
-              </div>
+              <WeekStrip today={today} fallback={targets} />
             </>
           )}
         </div>
@@ -343,6 +345,13 @@ function Hero({ consumed, target }: { consumed: number; target: number | null })
   const over = target !== null && left < 0;
   const shown = useCountUp(Math.abs(left));
   const pct = target ? Math.min(1, consumed / target) : 0;
+  // When food lands, a "+N kcal" chip floats up off the number (adjusting state during render, not in an effect).
+  const [prev, setPrev] = useState(consumed);
+  const [gain, setGain] = useState<{ n: number; kcal: number } | null>(null);
+  if (consumed !== prev) {
+    setPrev(consumed);
+    if (consumed - prev >= 1) setGain((g) => ({ n: (g?.n ?? 0) + 1, kcal: Math.round(consumed - prev) }));
+  }
   const face = target === null ? "face-violet" : over ? "face-over" : "face-lime";
   return (
     <section className={`plunk ${face} p-5`} style={{ ["--i" as string]: 1, ["--d" as string]: "6px" }} aria-live="polite">
@@ -356,6 +365,11 @@ function Hero({ consumed, target }: { consumed: number; target: number | null })
         )}
       </div>
       <p className="hero-num num mt-3 text-[88px]">{fmtInt(shown)}</p>
+      {gain && (
+        <span key={gain.n} className="kcal-float num pointer-events-none absolute right-5 top-16 bg-[#0d0d0d] px-2 py-1 text-sm font-extrabold text-lime" aria-hidden="true">
+          +{fmtInt(gain.kcal)} kcal
+        </span>
+      )}
       {target !== null && (
         <>
           <p className="num mt-2 text-sm font-semibold opacity-80">
@@ -419,7 +433,9 @@ function StatTiles({ consumed, target }: { consumed: Targets; target: Targets })
                 {s.label}
                 {over && <span className="text-over" aria-label="over target">↑</span>}
               </p>
-              <p className="num mt-1 text-2xl font-extrabold tracking-tight">{fmtG(s.v)}</p>
+              <p className="num mt-1 text-2xl font-extrabold tracking-tight">
+                <CountG v={s.v} />
+              </p>
               <p className="num whitespace-nowrap text-xs font-semibold text-ink-3">of {s.t} g</p>
               <Progress value={s.v} max={s.t} color={s.color} label={`${s.label} progress`} />
             </div>
@@ -449,6 +465,11 @@ function StatTiles({ consumed, target }: { consumed: Targets; target: Targets })
       </p>
     </section>
   );
+}
+
+/** Grams that tick up to the new value (one decimal under 10 g, like fmtG). */
+function CountG({ v }: { v: number }) {
+  return <>{fmtG(useCountUp(Math.round(v * 10)) / 10)}</>;
 }
 
 function Progress({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
@@ -505,7 +526,7 @@ function MealCard({ meal, items, kcal, pendingText, pendingPhoto, index }: { mea
       {open && (
         <ul id={id} className="border-t border-line-soft">
           {items.map((i) => (
-            <li key={i.id} className="flex items-start gap-1 border-b border-line-soft py-1 pl-1 pr-4 last:border-b-0">
+            <li key={i.id} className="rise-in flex items-start gap-1 border-b border-line-soft py-1 pl-1 pr-4 last:border-b-0">
               <button className="flex min-w-0 flex-1 items-start gap-3 px-3 py-2 text-left hover:bg-elevated" onClick={() => setSheet({ kind: "edit", item: i })} aria-label={`Edit ${i.name}, ${Math.round(i.calories)} kcal`}>
               <div className="min-w-0 flex-1">
                 <p className="truncate font-semibold">{i.name}</p>
@@ -522,7 +543,7 @@ function MealCard({ meal, items, kcal, pendingText, pendingPhoto, index }: { mea
               </div>
               <span className="num pt-0.5 font-bold">{fmtInt(i.calories)}</span>
               </button>
-              <button onClick={() => deleteItem(i.id)} className="-mr-2 mt-1.5 flex h-9 w-9 shrink-0 items-center justify-center text-ink-3 hover:text-over" aria-label={`Delete ${i.name}`}>
+              <button onClick={() => deleteItem(i.id)} className="press -mr-2 mt-1 flex h-11 w-11 shrink-0 items-center justify-center text-ink-3 hover:text-over" aria-label={`Delete ${i.name}`}>
                 <Icon.trash size={16} />
               </button>
             </li>

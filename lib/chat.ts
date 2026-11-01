@@ -5,6 +5,7 @@
  *  - only the last few turns of conversation.
  * Simple questions ("what's left today?") are answered on the device.
  */
+import { fmtLitres, waterTarget } from "./water";
 import { foodKey } from "./calibration";
 import type { DaySummary } from "./db";
 import type { Insight } from "./insights";
@@ -138,17 +139,19 @@ export function buildDigest(i: DigestInput): string {
 }
 
 /** Answers that need no AI call. Returns null when the question needs the coach. */
-export function localAnswer(text: string, input: { calc: TargetCalc; todayItems: DayLog["items"] }): string | null {
+export function localAnswer(text: string, input: { calc: TargetCalc; todayItems: DayLog["items"]; waterMl?: number }): string | null {
   const q = norm(text);
   if (!/^(whats|what is|how much)?\s*(left|remaining)( today| for today)?$/.test(q)) return null;
   const t = input.calc.targets;
   const tot = sumItems(input.todayItems);
   const left = remaining(t, tot);
-  if (!input.todayItems.length) return `Nothing logged yet today. Your targets: ${fmt(t.calories)} kcal and ${t.protein_g} g protein.`;
+  const waterLeft = waterTarget(input.calc.weightKg) - (input.waterMl ?? 0);
+  const water = waterLeft > 0 ? ` Water: ${fmtLitres(waterLeft)} to go.` : " Water: done.";
+  if (!input.todayItems.length) return `Nothing logged yet today. Your targets: ${fmt(t.calories)} kcal and ${t.protein_g} g protein.${water}`;
   const parts = [
     left.calories >= 0 ? `${fmt(left.calories)} kcal left` : `${fmt(-left.calories)} kcal over`,
     left.protein_g > 0 ? `${Math.round(left.protein_g)} g protein to go` : "protein done",
     left.fibre_g > 0 ? `${Math.round(left.fibre_g)} g fibre to go` : "fibre done",
   ];
-  return `${parts.join(", ")}. (${fmt(tot.calories)} of ${fmt(t.calories)} kcal eaten.)`;
+  return `${parts.join(", ")}. (${fmt(tot.calories)} of ${fmt(t.calories)} kcal eaten.)${water}`;
 }

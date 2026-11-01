@@ -10,6 +10,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import * as db from "./db";
 import type { DayLog, Profile, TargetOverrides } from "./schemas";
 import {
+  LATE_RECORD_KINDS,
   RECORD_KINDS,
   applyRemoteFoods,
   applyRemoteItems,
@@ -61,12 +62,22 @@ async function push(sb: SupabaseClient, userId: string): Promise<number> {
 
   for (let i = 0; i < items.length; i += PAGE) check(await sb.from("log_items").upsert(items.slice(i, i + PAGE), { onConflict: "id" }));
   for (let i = 0; i < foods.length; i += PAGE) check(await sb.from("my_foods").upsert(foods.slice(i, i + PAGE), { onConflict: "user_id,key" }));
-  for (let i = 0; i < records.length; i += PAGE) check(await sb.from("records").upsert(records.slice(i, i + PAGE), { onConflict: "user_id,kind,key" }));
+  const late = records.filter((r) => LATE_RECORD_KINDS.includes(r.kind));
+  const core = records.filter((r) => !LATE_RECORD_KINDS.includes(r.kind));
+  for (let i = 0; i < core.length; i += PAGE) check(await sb.from("records").upsert(core.slice(i, i + PAGE), { onConflict: "user_id,kind,key" }));
+  // Newer kinds go separately: until the schema is updated (23514, check violation) they wait in the outbox.
+  let lateRejected = false;
+  for (let i = 0; i < late.length && !lateRejected; i += PAGE) {
+    const res = await sb.from("records").upsert(late.slice(i, i + PAGE), { onConflict: "user_id,kind,key" });
+    if (res.error?.code === "23514") lateRejected = true;
+    else check(res);
+  }
   if (out.profile) {
     const [profile, overrides] = await Promise.all([db.getProfile(), db.getOverrides()]);
     check(await sb.from("profiles").upsert({ user_id: userId, profile: profile ?? null, overrides }, { onConflict: "user_id" }));
   }
-  await db.ackOutbox(out);
+  const keepQueued = (id: string) => lateRejected && LATE_RECORD_KINDS.includes(splitRecordId(id).kind);
+  await db.ackOutbox({ ...out, records: Object.fromEntries(Object.entries(out.records).filter(([id]) => !keepQueued(id))) });
   return items.length + foods.length + records.length + (out.profile ? 1 : 0);
 }
 

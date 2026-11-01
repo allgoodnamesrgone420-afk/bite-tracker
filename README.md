@@ -15,6 +15,17 @@ Describe what you ate ("2 rotis, a bowl of dal and a small bowl of curd at lunch
 7. **Voice.** The mic in the input uses the browser's speech recognition (`en-IN`) and fills the box; you still press send. Chrome processes the audio on Google's servers, Safari on Apple's.
 8. **Barcodes.** **+** → *Scan a barcode* scans packaged food with the camera (native `BarcodeDetector`, or a self-hosted WebAssembly decoder on iPhone), from a photo, or by typing the number. `/api/barcode` looks it up in [Open Food Facts](https://world.openfoodfacts.org) (only the number is sent) and returns label values per serving. Not found? *Snap the label* reads it with the vision model.
 9. **Saved meals and recipes.** Tap the bookmark on a meal (or *Save as meal* when confirming) to log the same group in one tap from **+**. On **Foods**, a recipe takes your ingredient list, works out the nutrition, and divides by servings; it then acts as a calibrated food, so "1 serving mom's rajma" parses instantly.
+10. **Sugar-free.** "Diet coke", "coke zero", "pepsi black", "sugar free …", "chai without sugar" and "pheeki chai" swap in the unsweetened version (soft drinks, chai, coffee, nimbu pani, energy drinks). A sugar-free food the library only knows sweetened goes to the AI instead of being guessed.
+11. **Forgot something?** On Progress, pick a day and tap *Add food to this day*: the food box says which day it's adding to until you tap *Back to today* or leave the page. Tap any item in a past day to edit or delete it.
+12. **Late nights.** The logging day runs 4 am to 4 am (`DAY_START_HOUR` in `lib/totals.ts`), so a 1 am snack counts toward the night before.
+
+## Water
+
+Today has a water glass: tap *+ Glass* (250 ml) as you drink, *−* to take one back. The goal is about 35 ml per kg of body weight (your trend weight once you weigh in), in whole glasses between 2 and 4 litres (`lib/water.ts`). Water shows on each day in Progress, as seven glasses on the weekly report card, and in the coach's "what's left today?". It syncs as `water` records; databases set up before it need `npm run db:setup` re-run (until then water stays on the device and waits to sync, and everything else syncs as normal).
+
+## Micronutrient sources
+
+Tap any micronutrient (Today, or a day in Progress) to see which foods it came from, biggest first: "Dal 450 mg · 45%, Papad 200 mg · 20%…".
 
 ## Targets that adapt
 
@@ -43,7 +54,7 @@ With Supabase connected, Bite has accounts and syncs across devices:
 - **Sign in** with email + password. Sign-up is **invite-only**: a database trigger rejects any email that isn't on the invite list, and the owner manages invites in Settings → People.
 - **Local-first sync.** Each device keeps a full copy in IndexedDB, so the app is instant and works offline. Every change goes into an outbox, gets pushed to Postgres, and changes from other devices are pulled and merged by record (`lib/sync.ts`, `lib/sync-core.ts`). The server's `updated_at` decides order, so the last write to reach the server wins per item. Syncs run after edits, on focus, when you're back online, and every minute.
 - **Privacy.** Row-level security (`supabase/schema.sql`) means each user can only read and write their own rows, and only while their email is still invited. Removing someone cuts off their sync and AI access.
-- **What syncs:** log items, your foods, profile and targets, plus a generic `records` table for weigh-ins, saved meals, recipes, the coach's memory and chat history (each record capped at 64 KB).
+- **What syncs:** log items, your foods, profile and targets, plus a generic `records` table for weigh-ins, water, saved meals, recipes, the coach's memory and chat history (each record capped at 64 KB).
 - **Your name** is stored on your account (`display_name`); set it at sign-up or in Settings. Change your password under Settings → Account, which asks for your current password first.
 - **AI routes** accept only a signed-in, invited user, which replaces the passcode. Without Supabase the app runs in local-only mode, exactly as before.
 - **Signing out** clears this device; your data stays in your account. The first sign-in on a device uploads anything logged there before the account existed.
@@ -76,6 +87,8 @@ Every provider gets the same guarantees: schema-constrained JSON, Zod validation
 
 To switch: change `LLM_API_KEY` (plus `LLM_PROVIDER` / `LLM_MODEL` if needed) in Vercel → Settings → Environment Variables, then redeploy.
 
+**Per device, from Settings → AI:** anyone can pick a model and a thinking level (Off, Low, Medium, High). The key is yours, so the server only honours models on its list: the configured ones, a built-in list for OpenAI and Anthropic, and anything in `LLM_MODEL_CHOICES` (comma-separated). Anything else falls back to the configured model.
+
 ## Architecture
 
 - **Next.js 16 App Router + TypeScript + Tailwind v4 + Zod.** Client-rendered screens with a phone layout (bottom dock) and a desktop layout (sidebar, food bar on top, multi-column dashboards; press `/` to jump to the food box). Stateless route handlers: `/api/parse` (text), `/api/parse-photo` (vision), `/api/coach` (reviews), `/api/chat` (coach chat) and `/api/barcode` (Open Food Facts). The client owns all fallbacks (food library, built-in coach), so the server stays a thin, keyed proxy.
@@ -104,6 +117,7 @@ Fill in `.env.local`:
 | `LLM_PROVIDER` | optional: `openai`, `anthropic`, `gemini`, `groq`, `openrouter`, `deepseek`, `xai`, `mistral`, `compatible` |
 | `LLM_MODEL` | optional: one model for all tasks; or per task `LLM_PARSER_MODEL`, `LLM_VISION_MODEL`, `LLM_COACH_MODEL` |
 | `LLM_REASONING_EFFORT` | optional: `none` … `max`, where the model supports it |
+| `LLM_MODEL_CHOICES` | optional: extra models people can pick in Settings → AI (comma-separated) |
 | `LLM_BASE_URL` | required for `compatible` (any OpenAI-compatible endpoint) |
 | `APP_PASSCODE` | optional; if set, clients must send it (entered once, stored on device) |
 
@@ -158,3 +172,6 @@ A service worker (`public/sw.js`, registered only in production) caches the app 
 11. Recipe: Foods → Recipes → New, `250g rajma (dry), 2 tbsp oil, 2 onion, 2 tomato`, 4 servings. Then type `1 serving rajma` (use your recipe's name).
 12. Coach chat: ask "plan my dinner", answer its question, then open *What the coach remembers*.
 13. Weight: log a few weigh-ins on Progress; after ~2 weeks of full logging, Settings shows maintenance "from your data".
+14. Sugar-free: `diet coke`, `chai no sugar`, `sugar free biscuits` (the last one asks the AI).
+15. Water: tap *+ Glass* on Today until the goal; then check the day in Progress and the weekly report card.
+16. Backfill: Progress → pick yesterday → *Add food to this day* → `2 roti and dal for dinner`.

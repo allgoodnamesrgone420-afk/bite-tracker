@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addDays, byMeal, macroSplit, remaining, streak, sumItems } from "@/lib/totals";
+import { addDays, byMeal, logDayKey, macroSplit, remaining, streak, sumItems } from "@/lib/totals";
 import type { LogItem } from "@/lib/schemas";
 
 const item = (over: Partial<LogItem>): LogItem => ({
@@ -56,5 +56,17 @@ describe("dates and streak", () => {
   it("breaks on a gap", () => {
     expect(streak(["2026-09-19", "2026-09-21", "2026-09-22", "2026-09-23"], "2026-09-23")).toBe(3);
     expect(streak(["2026-09-20"], "2026-09-23")).toBe(0);
+  });
+});
+
+describe("logDayKey", () => {
+  it("counts the small hours toward the night before", () => {
+    expect(logDayKey(new Date(2026, 9, 31, 23, 30))).toBe("2026-10-31");
+    expect(logDayKey(new Date(2026, 10, 1, 1, 15))).toBe("2026-10-31");
+    expect(logDayKey(new Date(2026, 10, 1, 3, 59))).toBe("2026-10-31");
+  });
+  it("starts the new day at 4 am, across month and year ends", () => {
+    expect(logDayKey(new Date(2026, 10, 1, 4, 0))).toBe("2026-11-01");
+    expect(logDayKey(new Date(2027, 0, 1, 2, 0))).toBe("2026-12-31");
   });
 });

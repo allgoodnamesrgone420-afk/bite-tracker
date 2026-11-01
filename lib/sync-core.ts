@@ -18,7 +18,12 @@ export type RemoteFoodRow = { key: string; food: PersonalFood | null; deleted: b
  * Small keyed records that sync through one generic table: weigh-ins (key =
  * date), saved meals, recipes, the coach's memory and chat history.
  */
-export const RECORD_KINDS = ["weight", "meal", "recipe", "memory", "chat"] as const;
+export const RECORD_KINDS = ["weight", "meal", "recipe", "memory", "chat", "water"] as const;
+/**
+ * Kinds added after launch. A database that hasn't re-run `npm run db:setup`
+ * rejects them (check constraint), so sync keeps them queued instead of failing.
+ */
+export const LATE_RECORD_KINDS: readonly RecordKind[] = ["water"];
 export type RecordKind = (typeof RECORD_KINDS)[number];
 /** Outbox key is `${kind}/${key}`; `null` means deleted. */
 export type RecordChange = unknown;

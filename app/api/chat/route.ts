@@ -1,4 +1,4 @@
-import { callLLM } from "@/lib/llm";
+import { callLLM, readAIPref } from "@/lib/llm";
 import { ChatReplySchema, ChatRequestSchema } from "@/lib/schemas";
 import { errorResponse, guard, okResponse, readJsonBody } from "@/lib/server/guard";
 import { CHAT_SYSTEM, buildChatMessages } from "@/lib/server/prompts";
@@ -20,6 +20,7 @@ export async function POST(req: Request) {
   if (!parsed.success) return errorResponse("bad_request", parsed.error.issues[0]?.message ?? "Invalid chat request.");
 
   const result = await callLLM({
+    pref: readAIPref(req),
     task: "coach",
     system: CHAT_SYSTEM,
     messages: buildChatMessages(parsed.data),

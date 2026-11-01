@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { inferProvider, resolveConfig } from "@/lib/llm/config";
+import { applyPref, inferProvider, modelChoices, resolveConfig } from "@/lib/llm/config";
 import { strictJsonSchema } from "@/lib/llm/schema";
 import { callLLM } from "@/lib/llm";
 import { ParseResultSchema } from "@/lib/schemas";
@@ -142,5 +142,32 @@ describe("Anthropic adapter", () => {
     expect(r.ok).toBe(true);
     expect(seen[0].path).toBe("/v1/messages");
     expect(seen[0].body).toMatchObject({ model: "claude-haiku-4-5", temperature: 0.1, output_config: { format: { type: "json_schema" } } });
+  });
+});
+
+describe("model choice from Settings", () => {
+  const env = { LLM_API_KEY: "sk-ant-abc", LLM_MODEL_CHOICES: "claude-sonnet-4-6" };
+  const cfg = () => {
+    const r = resolveConfig(env);
+    if (!r.ok) throw new Error(r.detail);
+    return r.config;
+  };
+  it("lists the configured models, the built-in list and LLM_MODEL_CHOICES", () => {
+    const c = modelChoices(cfg(), env);
+    expect(c).toContain("claude-haiku-4-5");
+    expect(c).toContain("claude-opus-5-5");
+    expect(c).toContain("claude-sonnet-4-6");
+    expect(new Set(c).size).toBe(c.length);
+  });
+  it("uses a listed model for every task, with the chosen thinking level", () => {
+    const c = applyPref(cfg(), { model: "claude-opus-5-5", effort: "high" }, env);
+    expect(c.models).toEqual({ parse: "claude-opus-5-5", vision: "claude-opus-5-5", coach: "claude-opus-5-5" });
+    expect(c.effort).toBe("high");
+  });
+  it("ignores models that aren't on the list and unknown effort levels", () => {
+    const base = cfg();
+    const c = applyPref(base, { model: "some-expensive-model", effort: "ultra" as never }, env);
+    expect(c.models).toEqual(base.models);
+    expect(c.effort).toBe(base.effort);
   });
 });

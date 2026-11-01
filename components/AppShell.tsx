@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useApp } from "./AppProvider";
 import { AuthScreen } from "./AuthScreen";
 import { ConfirmSheet } from "./ConfirmSheet";
@@ -10,7 +10,12 @@ import { Icon } from "./ui";
 
 /** With accounts enabled, the app sits behind sign-in; in local-only mode it's always open. */
 export function AppShell({ children }: { children: ReactNode }) {
-  const { account } = useApp();
+  const { account, setLogDate } = useApp();
+  const pathname = usePathname();
+  // Adding to a past day is a Progress thing; leaving the page goes back to logging today.
+  useEffect(() => {
+    if (pathname !== "/progress") setLogDate(null);
+  }, [pathname, setLogDate]);
   if (account.configured && !account.ready) {
     return <p className="label pulse mx-auto max-w-[430px] px-5 pt-16">Loading…</p>;
   }

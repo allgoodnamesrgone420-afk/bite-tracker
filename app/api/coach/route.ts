@@ -1,4 +1,4 @@
-import { callLLM } from "@/lib/llm";
+import { callLLM, readAIPref } from "@/lib/llm";
 import { CoachRequestSchema, CoachResponseSchema } from "@/lib/schemas";
 import { errorResponse, guard, okResponse, readJsonBody } from "@/lib/server/guard";
 import { COACH_SYSTEM, buildCoachUserMessage } from "@/lib/server/prompts";
@@ -22,6 +22,7 @@ export async function POST(req: Request) {
   if (!parsed.success) return errorResponse("bad_request", "Invalid coach request.");
 
   const result = await callLLM({
+    pref: readAIPref(req),
     task: "coach",
     system: COACH_SYSTEM,
     messages: [{ role: "user", content: buildCoachUserMessage(parsed.data) }],

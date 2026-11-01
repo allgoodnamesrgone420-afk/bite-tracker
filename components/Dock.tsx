@@ -76,8 +76,12 @@ function useVoice(onText: (text: string) => void) {
 
 /** Chips + "what did you eat" box. Bottom dock on phones, top bar on desktop. */
 export function FoodBar({ variant }: { variant: "dock" | "top" }) {
-  const { submitText, submitPhoto, setSheet, quickAdd, myFoods, pending, online } = useApp();
+  const { submitText, submitPhoto, setSheet, quickAdd, myFoods, pending, online, logDate, setLogDate } = useApp();
+  const pathname = usePathname();
   const [text, setText] = useState("");
+  // Phones: quick-add chips live on Today; elsewhere they appear while you're typing, to keep the dock short.
+  const [focused, setFocused] = useState(false);
+  const blurTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const fileRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const chips = topFoods(myFoods, variant === "top" ? 10 : 8);
@@ -98,6 +102,23 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [variant]);
+
+  // Picking a past day to add to (from Progress) jumps to the visible food box.
+  useEffect(() => {
+    if (logDate && inputRef.current?.offsetParent) inputRef.current.focus();
+  }, [logDate]);
+
+  const backfillBar = logDate && (
+    <div className={`flex items-center justify-between gap-2 ${variant === "dock" ? "px-4 pt-2" : "pb-2"}`} role="status">
+      <p className="flex min-w-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.08em]">
+        <span className="h-2 w-2 shrink-0 bg-lime" aria-hidden="true" />
+        <span className="truncate">Adding to {new Date(`${logDate}T00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}</span>
+      </p>
+      <button type="button" onClick={() => setLogDate(null)} className="shrink-0 text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2 underline decoration-lime decoration-2 underline-offset-4 hover:text-ink">
+        Back to today
+      </button>
+    </div>
+  );
 
   const chipRow = chips.length > 0 && (
     <div className={`no-scrollbar flex gap-1.5 overflow-x-auto ${variant === "dock" ? "px-4 pt-2" : "pt-2"}`} role="group" aria-label="Quick add your usual foods">
@@ -121,8 +142,17 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
 
   return (
     <>
-      {variant === "dock" && chipRow}
+      {backfillBar}
+      {variant === "dock" && (pathname === "/" || focused || !!logDate) && chipRow}
       <form
+        onFocus={() => {
+          clearTimeout(blurTimer.current);
+          setFocused(true);
+        }}
+        // Delay so a tap on a chip lands before the chips hide.
+        onBlur={() => {
+          blurTimer.current = setTimeout(() => setFocused(false), 200);
+        }}
         className={`flex items-stretch gap-1.5 ${variant === "dock" ? "px-4 pt-2" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
@@ -149,7 +179,7 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
             maxLength={PARSE_MAX_CHARS}
-            placeholder={voice.listening ? "Listening…" : online ? (variant === "top" ? "What did you eat?  (press / to jump here)" : "What did you eat?") : "Offline: tap +"}
+            placeholder={voice.listening ? "Listening…" : logDate ? "What did you forget to log?" : online ? (variant === "top" ? "What did you eat?  (press / to jump here)" : "What did you eat?") : "Offline: tap +"}
             enterKeyHint="send"
             autoComplete="off"
             className={`mb-1 h-12 w-full border border-line bg-surface pl-3 text-base text-ink placeholder:text-ink-3 focus:border-ink focus:shadow-[3px_3px_0_var(--lime)] focus:outline-none ${!tools ? "pr-3" : voice.supported ? "pr-[76px]" : "pr-10"}`}
@@ -235,6 +265,8 @@ export function FoodBar({ variant }: { variant: "dock" | "top" }) {
 export function Dock() {
   const dockRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
+  // The weekly report card lives under Progress.
+  const activeIdx = TABS.findIndex((t) => t.href === (pathname === "/week" ? "/progress" : pathname));
 
   // Publish the dock's real height so pages and toasts can clear it (0 when hidden on desktop).
   useEffect(() => {
@@ -248,21 +280,32 @@ export function Dock() {
   return (
     <div className="fixed inset-x-0 bottom-0 z-30 lg:hidden">
       <div ref={dockRef} className="mx-auto max-w-[430px] border-t border-line bg-bg/95 backdrop-blur-sm">
-        <FoodBar variant="dock" />
-        <nav aria-label="Main" className="flex gap-1 border-t border-line px-2 pb-[max(6px,env(safe-area-inset-bottom))] pt-1.5">
-          {TABS.map((t) => {
-            const active = pathname === t.href;
+        {/* Coach has its own chat box; two inputs stacked is confusing. */}
+        {pathname !== "/coach" && <FoodBar variant="dock" />}
+        <nav aria-label="Main" className={`relative flex px-2 pb-[max(6px,env(safe-area-inset-bottom))] pt-1.5 ${pathname !== "/coach" ? "border-t border-line" : ""}`}>
+          {/* One highlight that slides to the active tab. */}
+          {activeIdx >= 0 && (
+            <span
+              className="tab-glide absolute left-2 top-1.5 h-12 bg-lime"
+              style={{ width: `calc((100% - 16px) / ${TABS.length})`, transform: `translateX(${activeIdx * 100}%)` }}
+              aria-hidden="true"
+            />
+          )}
+          {TABS.map((t, i) => {
+            const active = i === activeIdx;
             const I = t.icon;
             return (
               <Link
                 key={t.href}
                 href={t.href}
-                aria-current={active ? "page" : undefined}
-                className={`flex h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold uppercase tracking-[0.08em] transition-colors ${
-                  active ? "bg-lime text-on-accent" : "text-ink-3 hover:text-ink"
+                aria-current={pathname === t.href ? "page" : undefined}
+                className={`press relative flex h-12 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-[10px] font-bold uppercase tracking-[0.08em] transition-colors duration-200 ${
+                  active ? "text-on-accent" : "text-ink-3 hover:text-ink"
                 }`}
               >
-                <I size={18} />
+                <span className={active ? "pop-in" : ""} key={active ? "on" : "off"}>
+                  <I size={18} />
+                </span>
                 {t.label}
               </Link>
             );
@@ -280,14 +323,22 @@ export function Toast() {
 }
 
 function ToastInner({ message, undo, onDone }: { message: string; undo?: () => void; onDone: () => void }) {
+  // Longer when there's an Undo to reach for.
   useEffect(() => {
-    const t = setTimeout(onDone, 4000);
+    const t = setTimeout(onDone, undo ? 6000 : 4000);
     return () => clearTimeout(t);
-  }, [onDone]);
+  }, [onDone, undo]);
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(var(--dock-h)+12px)] z-40 flex justify-center px-5 lg:bottom-6 lg:left-60">
-      <div role="status" className="backdrop pointer-events-auto flex w-full max-w-[390px] items-center justify-between gap-3 border border-line bg-elevated px-4 py-3 shadow-[4px_4px_0_#000]">
-        <span className="text-sm font-semibold">{message}</span>
+      <div role="status" className="toast-in pointer-events-auto flex w-full max-w-[390px] items-center justify-between gap-3 border border-line bg-elevated px-4 py-3 shadow-[4px_4px_0_#000]">
+        <span className="flex min-w-0 items-center gap-2.5 text-sm font-semibold">
+          <span className={`draw-check flex h-6 w-6 shrink-0 items-center justify-center ${undo ? "bg-elevated text-ink-2" : "bg-lime text-on-accent"}`} aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square">
+              <path d="M4 12.5l5 5L20 6.5" />
+            </svg>
+          </span>
+          {message}
+        </span>
         {undo && (
           <button
             className="text-xs font-bold uppercase tracking-[0.1em] text-protein"

@@ -7,6 +7,7 @@ import { Icon, PopButton, fmtInt } from "@/components/ui";
 import * as db from "@/lib/db";
 import { STATUS_META, type DayStatus } from "@/lib/progress";
 import { buildWeekReport, defaultReportWeek, reportText, weekDates, type WeekReport } from "@/lib/report";
+import { fmtLitres, waterTarget } from "@/lib/water";
 import type { DayLog } from "@/lib/schemas";
 import { addDays, weekStart } from "@/lib/totals";
 
@@ -46,6 +47,40 @@ export default function WeekPage() {
   }
   const latest = weekStart(today);
   return <Report r={report} onPrev={() => setStart(addDays(week, -7))} onNext={week < latest ? () => setStart(addDays(week, 7)) : undefined} />;
+}
+
+/** Seven little glasses, one per day, filled to how much you drank. */
+function WeekWater({ start }: { start: string }) {
+  const { water, calc, today } = useApp();
+  const target = waterTarget(calc?.weightKg);
+  const dates = weekDates(start);
+  const logged = dates.filter((d) => water[d]?.ml);
+  if (!logged.length) return null;
+  const hit = dates.filter((d) => (water[d]?.ml ?? 0) >= target).length;
+  const avg = logged.reduce((sum, d) => sum + water[d].ml, 0) / logged.length;
+  return (
+    <section className="card p-4" style={{ ["--i" as string]: 3 }} aria-label="Water this week">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="label">Water</p>
+        <p className="num text-xs text-ink-2">
+          goal hit {hit}/7 · avg {fmtLitres(avg)}
+        </p>
+      </div>
+      <div className="mt-3 grid grid-cols-7 gap-2">
+        {dates.map((d) => {
+          const pct = Math.min(1, (water[d]?.ml ?? 0) / target);
+          return (
+            <div key={d} className="flex flex-col items-center gap-1">
+              <div className="relative h-10 w-full max-w-8 bg-elevated" style={{ clipPath: "polygon(0 0, 100% 0, 86% 100%, 14% 100%)" }} title={`${fmt(d, { weekday: "long" })}: ${fmtLitres(water[d]?.ml ?? 0)}`}>
+                <div className="water-level absolute inset-x-0 bottom-0 bg-water" style={{ height: `${pct * 100}%` }} />
+              </div>
+              <span className={`text-[10px] uppercase ${d === today ? "font-bold text-ink" : "text-ink-3"}`}>{fmt(d, { weekday: "narrow" })}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
 }
 
 function Report({ r, onPrev, onNext }: { r: WeekReport; onPrev: () => void; onNext?: () => void }) {
@@ -134,6 +169,7 @@ function Report({ r, onPrev, onNext }: { r: WeekReport; onPrev: () => void; onNe
                   sub={r.sodium.tracked ? `days over ${fmtInt(r.sodium.limit)} mg` : "no fully tracked days"}
                 />
               </section>
+              <WeekWater start={r.start} />
             </div>
 
             <div className="space-y-4">

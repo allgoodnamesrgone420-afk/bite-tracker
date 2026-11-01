@@ -8,11 +8,11 @@
 import "server-only";
 import type { z } from "zod";
 import { extractJson } from "../extract-json";
-import { resolveConfig, type Provider } from "./config";
+import { EFFORTS, applyPref, modelChoices, resolveConfig, type Provider } from "./config";
 import * as anthropic from "./providers/anthropic";
 import * as openai from "./providers/openai";
 import { strictJsonSchema } from "./schema";
-import { LLMError, type LLMMessage, type LLMResult, type LLMTask, type ProviderRequest, type ProviderResponse } from "./types";
+import { LLMError, type AIPref, type Effort, type LLMMessage, type LLMResult, type LLMTask, type ProviderRequest, type ProviderResponse } from "./types";
 
 export type { LLMMessage, LLMPart, LLMResult, LLMTask } from "./types";
 
@@ -25,6 +25,8 @@ export interface CallLLMOptions<S extends z.ZodType> {
   maxTokens: number;
   /** Used where the provider/model accepts it; ignored otherwise. */
   temperature?: number;
+  /** The caller's model / thinking choice from Settings (see readAIPref). */
+  pref?: AIPref;
 }
 
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -35,17 +37,25 @@ function adapter(provider: Provider): (req: ProviderRequest, key: string, baseUR
   return openai.completeChat; // every other provider speaks OpenAI-compatible Chat Completions
 }
 
-/** Non-secret summary for the Settings screen. */
-export function describeLLM(): { configured: boolean; provider?: string; models?: Record<LLMTask, string>; effort?: string; problem?: string } {
+/** Non-secret summary for the Settings screen: the server's defaults and what you can switch to. */
+export function describeLLM(): { configured: boolean; provider?: string; models?: Record<LLMTask, string>; effort?: string; choices?: string[]; problem?: string } {
   const r = resolveConfig();
   if (!r.ok) return { configured: false, problem: r.detail };
-  return { configured: true, provider: r.config.provider, models: r.config.models, effort: r.config.effort };
+  return { configured: true, provider: r.config.provider, models: r.config.models, effort: r.config.effort, choices: modelChoices(r.config) };
+}
+
+/** The Settings choice the client sends as x-ai-model / x-ai-effort headers. */
+export function readAIPref(req: Request): AIPref | undefined {
+  const model = req.headers.get("x-ai-model")?.trim().slice(0, 80) || undefined;
+  const e = req.headers.get("x-ai-effort")?.trim().toLowerCase();
+  const effort = e && EFFORTS.includes(e as Effort) ? (e as Effort) : undefined;
+  return model || effort ? { model, effort } : undefined;
 }
 
 export async function callLLM<S extends z.ZodType>(opts: CallLLMOptions<S>): Promise<LLMResult<z.infer<S>>> {
   const cfg = resolveConfig();
   if (!cfg.ok) return { ok: false, error: { code: "config", detail: cfg.detail } };
-  const { provider, apiKey, baseURL, models, effort } = cfg.config;
+  const { provider, apiKey, baseURL, models, effort } = applyPref(cfg.config, opts.pref);
   const model = models[opts.task];
   const complete = adapter(provider);
   // OpenAI's GPT-6 docs don't list temperature for reasoning models; don't send it there.

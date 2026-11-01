@@ -1,4 +1,4 @@
-import { callLLM } from "@/lib/llm";
+import { callLLM, readAIPref } from "@/lib/llm";
 import { PhotoParseRequestSchema, ParseResultSchema } from "@/lib/schemas";
 import { errorResponse, guard, okResponse, readJsonBody } from "@/lib/server/guard";
 import { PHOTO_SYSTEM, buildPhotoUserText } from "@/lib/server/prompts";
@@ -23,6 +23,7 @@ export async function POST(req: Request) {
   const { image, mediaType } = parsed.data;
 
   const result = await callLLM({
+    pref: readAIPref(req),
     task: "vision",
     system: PHOTO_SYSTEM,
     messages: [
