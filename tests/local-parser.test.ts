@@ -49,12 +49,12 @@ describe("localParse", () => {
     expect(r.items[1]).toMatchObject({ name: "Poha", quantity: 0.5, calories: 135 });
   });
 
-  it("treats 'with X' as a small add-on and ignores negations", () => {
+  it("treats 'with X' as a small add-on and handles negations", () => {
     const r = localParse("2 roti with ghee, chai no sugar", at(13));
     expect(r.items.map((i) => [i.name, i.quantity, i.unit])).toEqual([
       ["Roti", 2, "piece"],
       ["Ghee", 1, "tsp"],
-      ["Chai (milk + sugar)", 1, "cup"],
+      ["Chai (no sugar)", 1, "cup"],
     ]);
   });
 
@@ -116,5 +116,33 @@ describe("calibration", async () => {
     const [item] = applyCalibration([{ name: "Dal", quantity: 1, unit: "bowl", meal: "lunch", calories: 290, protein_g: 14, carbs_g: 38, fat_g: 9, fibre_g: 8, confidence: "medium", assumed: false, notes: "" }], foods);
     expect(item.calories).toBe(333); // 250 ml bowl / 150 ml katori × 200
     expect(item.notes).toBe("Your saved values");
+  });
+
+  it("logs diet / zero / sugar-free drinks as the unsweetened version", () => {
+    for (const text of ["diet coke", "coke zero", "sugar free coke", "zero sugar pepsi", "thums up zero", "pepsi black"]) {
+      const r = localParse(text, at(13));
+      expect(r.items.map((i) => [i.name, i.micros?.sugar_g]), text).toEqual([["Diet soft drink", 0]]);
+    }
+    expect(localParse("coke", at(13)).items[0].name).toBe("Soft drink");
+  });
+
+  it("drops the added sugar from chai and coffee when you say so", () => {
+    expect(localParse("chai without sugar", at(8)).items.map((i) => i.name)).toEqual(["Chai (no sugar)"]);
+    expect(localParse("2 cups chai, no sugar", at(8)).items.map((i) => [i.name, i.quantity])).toEqual([["Chai (no sugar)", 2]]);
+    expect(localParse("coffee with no sugar", at(8)).items.map((i) => i.name)).toEqual(["Coffee (no sugar)"]);
+    expect(localParse("pheeki chai", at(8)).items.map((i) => i.name)).toEqual(["Chai (no sugar)"]);
+    // Sugar is still logged when you have it.
+    expect(localParse("chai", at(8)).items.map((i) => i.name)).toEqual(["Chai (milk + sugar)"]);
+  });
+
+  it("asks rather than guessing when there's no sugar-free version", () => {
+    const r = localParse("sugar free biscuits", at(17));
+    expect(r.complete).toBe(false);
+    expect(r.unknown).toEqual(["sugar free biscuits"]);
+  });
+
+  it("swaps a personal Coke for the diet version too", () => {
+    const foods = personalAsFoods({ coke: { key: "coke", name: "Coke", unit: "can", per: [140, 0, 35, 0, 0], pm: [30, 35, 0, 5, 0], verified: true, uses: 3 } as never });
+    expect(localParse("diet coke", { ...at(13), ...foods }).items.map((i) => i.name)).toEqual(["Diet soft drink"]);
   });
 });

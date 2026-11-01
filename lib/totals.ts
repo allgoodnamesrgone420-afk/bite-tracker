@@ -73,6 +73,15 @@ export function addDays(key: string, delta: number): string {
   return dateKey(new Date(y, m - 1, d + delta));
 }
 
+/** The logging day starts at 4 am, so a 1 am snack still counts toward the night before. */
+export const DAY_START_HOUR = 4;
+
+/** The day you're logging into right now: before DAY_START_HOUR it's still yesterday. */
+export function logDayKey(now: Date = new Date()): string {
+  const key = dateKey(now);
+  return now.getHours() < DAY_START_HOUR ? addDays(key, -1) : key;
+}
+
 /**
  * Consecutive days with at least one item, ending today. If today has nothing
  * yet, the streak is still alive and counts back from yesterday.

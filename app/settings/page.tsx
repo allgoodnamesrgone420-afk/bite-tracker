@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import { useApp } from "@/components/AppProvider";
 import { Icon, PopButton, fmtInt } from "@/components/ui";
 import { apiAIStatus, type AIStatus } from "@/lib/api-client";
+import type { AIPref, Effort } from "@/lib/llm/types";
 import * as db from "@/lib/db";
 import { supabase, syncConfigured } from "@/lib/supabase";
 import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
@@ -428,15 +429,34 @@ const PROVIDER_NAME: Record<string, string> = {
   compatible: "OpenAI-compatible",
 };
 
+const THINKING: { value: Effort; label: string }[] = [
+  { value: "none", label: "Off (fastest)" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High (slowest)" },
+];
+
 function AISection() {
   const [status, setStatus] = useState<AIStatus | null | undefined>(undefined);
+  const [pref, setPref] = useState<AIPref>({});
+  const [savedNote, setSavedNote] = useState(false);
   useEffect(() => {
     let live = true;
     apiAIStatus().then((s) => live && setStatus(s));
+    db.getAIPref().then((p) => live && setPref(p));
     return () => {
       live = false;
     };
   }, []);
+  const choose = (patch: AIPref) => {
+    const next = { ...pref, ...patch };
+    setPref(next);
+    setSavedNote(true);
+    void db.saveAIPref(next);
+  };
+  const serverDefault = status?.models && new Set(Object.values(status.models)).size === 1 ? status.models.parse : "per task";
+  // A choice the server no longer offers is ignored there, so show it as default here too.
+  const model = pref.model && status?.choices?.includes(pref.model) ? pref.model : "";
   return (
     <section className="card space-y-2 p-4">
       <p className="label">AI</p>
@@ -448,23 +468,56 @@ function AISection() {
         <>
           <p className="font-bold">
             {PROVIDER_NAME[status.provider ?? ""] ?? status.provider}
-            {status.effort && <span className="ml-2 tag text-ink-2">{status.effort} effort</span>}
+            {(pref.effort ?? status.effort) && <span className="ml-2 tag text-ink-2">{pref.effort ?? status.effort} effort</span>}
           </p>
-          <dl className="num grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
-            <dt className="text-ink-3">Text</dt>
-            <dd className="truncate">{status.models?.parse}</dd>
-            <dt className="text-ink-3">Photos</dt>
-            <dd className="truncate">{status.models?.vision}</dd>
-            <dt className="text-ink-3">Coach</dt>
-            <dd className="truncate">{status.models?.coach}</dd>
-          </dl>
+          {model ? (
+            <p className="num text-xs">
+              <span className="text-ink-3">Text, photos and coach:</span> {model}
+            </p>
+          ) : (
+            <dl className="num grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+              <dt className="text-ink-3">Text</dt>
+              <dd className="truncate">{status.models?.parse}</dd>
+              <dt className="text-ink-3">Photos</dt>
+              <dd className="truncate">{status.models?.vision}</dd>
+              <dt className="text-ink-3">Coach</dt>
+              <dd className="truncate">{status.models?.coach}</dd>
+            </dl>
+          )}
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <label className="field compact min-w-0">
+              <span>Model</span>
+              <select value={model} onChange={(e) => choose({ model: e.target.value || undefined })}>
+                <option value="">Default ({serverDefault})</option>
+                {(status.choices ?? []).map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field compact min-w-0">
+              <span>Thinking</span>
+              <select value={pref.effort ?? ""} onChange={(e) => choose({ effort: (e.target.value || undefined) as Effort | undefined })}>
+                <option value="">Default ({status.effort ?? "model's own"})</option>
+                {THINKING.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="text-xs text-ink-3">
+            {savedNote ? "Saved on this device. Your next AI request uses it." : "More thinking is slower and costs more, but helps with tricky dishes and the coach. Applies on this device."}
+          </p>
         </>
       ) : (
         <p className="flex items-start gap-1.5 text-sm text-warn">
           <Icon.alert size={14} /> Not set up: {status.problem}. The food library and built-in coach still work.
         </p>
       )}
-      <p className="text-xs text-ink-3">Switch providers by changing LLM_API_KEY (and LLM_PROVIDER / LLM_MODEL if needed) in Vercel, then redeploy.</p>
+      <p className="text-xs text-ink-3">Switch providers by changing LLM_API_KEY (and LLM_PROVIDER / LLM_MODEL if needed) in Vercel, then redeploy. Add models to the list with LLM_MODEL_CHOICES.</p>
     </section>
   );
 }

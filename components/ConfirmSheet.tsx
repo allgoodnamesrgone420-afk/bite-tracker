@@ -16,6 +16,7 @@ export function ConfirmSheet() {
   const open = sheet.kind !== "closed";
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const drag = useSheetDrag(() => setSheet({ kind: "closed" }));
 
   useEffect(() => {
     if (!open) return;
@@ -38,7 +39,8 @@ export function ConfirmSheet() {
     };
     document.addEventListener("keydown", onKey);
     document.body.style.overflow = "hidden";
-    panelRef.current?.focus();
+    // A field that focused itself (manual entry) keeps focus; otherwise the panel takes it.
+    if (!panelRef.current?.contains(document.activeElement)) panelRef.current?.focus();
     return () => {
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = "";
@@ -50,15 +52,21 @@ export function ConfirmSheet() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center lg:items-center lg:p-6">
-      <div className="backdrop absolute inset-0 bg-black/70" onClick={() => setSheet({ kind: "closed" })} aria-hidden="true" />
+      <div className="backdrop absolute inset-0 bg-black/70" style={{ opacity: 1 - Math.min(0.8, drag.dy / 400) }} onClick={() => setSheet({ kind: "closed" })} aria-hidden="true" />
+      {/* The drag offset sits on a wrapper: the panel's own entrance animation owns its transform. */}
+      <div className="relative w-full max-w-[430px] lg:max-w-[600px]" style={drag.style}>
       <div
         ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className="sheet relative flex max-h-[88dvh] w-full max-w-[430px] flex-col border-t-4 border-lime bg-surface focus:outline-none lg:max-h-[85dvh] lg:max-w-[600px] lg:border-4 lg:shadow-[8px_8px_0_#000]"
+        className="sheet relative flex max-h-[88dvh] w-full flex-col border-t-4 border-lime bg-surface focus:outline-none lg:max-h-[85dvh] lg:border-4 lg:shadow-[8px_8px_0_#000]"
       >
+        {/* Phones: drag the handle down to close. */}
+        <div className="flex h-5 shrink-0 cursor-grab touch-none items-center justify-center lg:hidden" {...drag.handlers} aria-hidden="true">
+          <span className="h-1 w-10 bg-line" />
+        </div>
         <button
           onClick={() => setSheet({ kind: "closed" })}
           className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center text-ink-2 hover:text-ink"
@@ -68,8 +76,39 @@ export function ConfirmSheet() {
         </button>
         <SheetBody sheet={sheet} titleId={titleId} />
       </div>
+      </div>
     </div>
   );
+}
+
+/** Pull-down-to-close for the bottom sheet: far enough (or a quick flick) closes, otherwise it springs back. */
+function useSheetDrag(close: () => void) {
+  const start = useRef<{ y: number; t: number } | null>(null);
+  const [dy, setDy] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const end = (y: number) => {
+    if (!start.current) return;
+    const d = y - start.current.y;
+    const speed = d / Math.max(1, performance.now() - start.current.t);
+    start.current = null;
+    setDragging(false);
+    setDy(0);
+    if (d > 110 || (d > 30 && speed > 0.6)) close();
+  };
+  return {
+    dy,
+    style: { transform: dy ? `translateY(${dy}px)` : undefined, transition: dragging ? "none" : "transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1)" },
+    handlers: {
+      onPointerDown: (e: React.PointerEvent) => {
+        start.current = { y: e.clientY, t: performance.now() };
+        setDragging(true);
+        e.currentTarget.setPointerCapture(e.pointerId);
+      },
+      onPointerMove: (e: React.PointerEvent) => start.current && setDy(Math.max(0, e.clientY - start.current.y)),
+      onPointerUp: (e: React.PointerEvent) => end(e.clientY),
+      onPointerCancel: () => end(start.current?.y ?? 0),
+    },
+  };
 }
 
 function SheetBody({ sheet, titleId }: { sheet: Exclude<Sheet, { kind: "closed" }>; titleId: string }) {
@@ -86,7 +125,7 @@ function SheetBody({ sheet, titleId }: { sheet: Exclude<Sheet, { kind: "closed" 
     case "passcode":
       return <Passcode sheet={sheet} titleId={titleId} />;
     case "edit":
-      return <Edit key={sheet.item.id} item={sheet.item} titleId={titleId} />;
+      return <Edit key={sheet.item.id} item={sheet.item} date={sheet.date} titleId={titleId} />;
     case "add":
       return <AddMenu text={sheet.text} titleId={titleId} />;
     case "barcode":
@@ -98,7 +137,7 @@ function SheetBody({ sheet, titleId }: { sheet: Exclude<Sheet, { kind: "closed" 
 
 function Header({ label, title, titleId, children }: { label: string; title: ReactNode; titleId: string; children?: ReactNode }) {
   return (
-    <div className="px-5 pb-3 pr-14 pt-5">
+    <div className="px-5 pb-3 pr-14 pt-2 lg:pt-5">
       <p className="label">{label}</p>
       <h2 id={titleId} className="mt-1 text-xl font-bold leading-tight">
         {title}
@@ -115,7 +154,7 @@ const toParsed = (rows: DraftItem[]): ParsedItem[] =>
   rows.filter((r) => r.name.trim()).map((r) => ParsedItemSchema.parse({ ...r, name: r.name.trim(), unit: r.unit.trim() || "serving" }));
 
 function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>; titleId: string }) {
-  const { commitRows, setSheet } = useApp();
+  const { commitRows, setSheet, logDate } = useApp();
   const [rows, setRows] = useState<DraftItem[]>(sheet.rows);
   const [saving, setSaving] = useState(false);
   const valid = rows.filter((r) => r.name.trim());
@@ -131,6 +170,11 @@ function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>;
         {sheet.photo && <PhotoThumb src={sheet.photo} />}
         {sheet.text && !manual && <p className="mt-1 truncate text-sm text-ink-2">“{sheet.text}”</p>}
         {!manual && <EngineTag engine={sheet.engine} photo={!!sheet.photo} />}
+        {logDate && (
+          <p className="mt-2 text-xs font-bold">
+            Goes into {new Date(`${logDate}T00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}, not today.
+          </p>
+        )}
         {sheet.notice && (
           <p className="mt-3 flex gap-2 border border-warn/60 bg-warn/10 p-2.5 text-xs" role="status">
             <span className="text-warn">
@@ -141,8 +185,15 @@ function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>;
         )}
       </Header>
       <div className="flex-1 space-y-3 overflow-y-auto px-5 pb-4">
-        {rows.map((r) => (
-          <DraftRow key={r.key} row={r} onChange={(p) => update(r.key, p)} onRemove={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} />
+        {rows.map((r, i) => (
+          <DraftRow
+            key={r.key}
+            row={r}
+            onChange={(p) => update(r.key, p)}
+            onRemove={() => setRows((rs) => rs.filter((x) => x.key !== r.key))}
+            // A fresh blank row (manual entry, "Add another item") is ready to type into.
+            autoFocus={r.source === "manual" && !r.name && i === rows.length - 1}
+          />
         ))}
         <button
           onClick={() => setRows((rs) => [...rs, blankRow("", rs.at(-1)?.meal)])}
@@ -177,7 +228,7 @@ function Review({ sheet, titleId }: { sheet: Extract<Sheet, { kind: "review" }>;
             setSaving(false);
           }}
         >
-          <Icon.check size={18} /> Add to log
+          <Icon.check size={18} /> {logDate ? "Add to that day" : "Add to log"}
         </PopButton>
       </div>
     </>
@@ -212,7 +263,7 @@ function EngineTag({ engine, photo }: { engine: Engine; photo?: boolean }) {
   );
 }
 
-export function DraftRow({ row, onChange, onRemove }: { row: DraftItem; onChange: (p: Partial<DraftItem>) => void; onRemove: () => void }) {
+export function DraftRow({ row, onChange, onRemove, autoFocus }: { row: DraftItem; onChange: (p: Partial<DraftItem>) => void; onRemove: () => void; autoFocus?: boolean }) {
   // Changing quantity scales nutrients proportionally (keeps per-unit values).
   const setQuantity = (q: number) => {
     if (row.quantity > 0 && q > 0) {
@@ -240,7 +291,7 @@ export function DraftRow({ row, onChange, onRemove }: { row: DraftItem; onChange
       <div className="flex gap-2">
         <label className="field compact flex-1">
           <span>Item</span>
-          <input value={row.name} maxLength={80} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Poha" />
+          <input value={row.name} maxLength={80} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Poha" autoFocus={autoFocus} />
         </label>
         <button onClick={onRemove} className="flex w-11 items-center justify-center border border-line text-ink-3 hover:text-over" aria-label={`Remove ${row.name || "item"}`}>
           <Icon.trash size={18} />
@@ -312,7 +363,7 @@ function NumField({ label, value, onCommit, accent, max = 1000 }: { label: strin
 
 const toDraft = (i: LogItem): DraftItem => ({ ...i, key: i.id, origin: { quantity: i.quantity, n: nutrientsOf(i) } });
 
-function Edit({ item, titleId }: { item: LogItem; titleId: string }) {
+function Edit({ item, date, titleId }: { item: LogItem; date?: string; titleId: string }) {
   const { updateItem, correctItem } = useApp();
   const [rows, setRows] = useState<DraftItem[]>(() => [toDraft(item)]);
   const [fix, setFix] = useState("");
@@ -320,7 +371,9 @@ function Edit({ item, titleId }: { item: LogItem; titleId: string }) {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const origin = rows[0]?.origin ?? { quantity: item.quantity, n: nutrientsOf(item) };
   const totals = sumItems(rows.filter((r) => r.name.trim()));
-  const loggedAt = new Date(item.createdAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+  const loggedAt = date
+    ? new Date(`${date}T00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })
+    : `logged ${new Date(item.createdAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}`;
 
   const update = (key: string, patch: Partial<DraftItem>) => setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
@@ -343,7 +396,7 @@ function Edit({ item, titleId }: { item: LogItem; titleId: string }) {
 
   return (
     <>
-      <Header label={`Edit · logged ${loggedAt}`} title={item.name} titleId={titleId} />
+      <Header label={`Edit · ${loggedAt}`} title={item.name} titleId={titleId} />
       <div className="flex-1 space-y-3 overflow-y-auto px-5 pb-4">
         {rows.map((r) => (
           <DraftRow key={r.key} row={r} onChange={(p) => update(r.key, p)} onRemove={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} />
@@ -377,10 +430,10 @@ function Edit({ item, titleId }: { item: LogItem; titleId: string }) {
           <strong className="text-lg text-ink">{fmtInt(totals.calories)}</strong> kcal · P {fmtG(totals.protein_g)} · C {fmtG(totals.carbs_g)} · F {fmtG(totals.fat_g)}
         </p>
         <div className="flex gap-3">
-          <PopButton variant="danger" onClick={() => updateItem(item.id, [])} aria-label={`Delete ${item.name}`}>
+          <PopButton variant="danger" onClick={() => updateItem(item.id, [], date)} aria-label={`Delete ${item.name}`}>
             <Icon.trash size={18} />
           </PopButton>
-          <PopButton block onClick={() => updateItem(item.id, rows)} disabled={!rows.some((r) => r.name.trim())}>
+          <PopButton block onClick={() => updateItem(item.id, rows, date)} disabled={!rows.some((r) => r.name.trim())}>
             <Icon.check size={18} /> Save changes
           </PopButton>
         </div>

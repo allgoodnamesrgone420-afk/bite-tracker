@@ -1,4 +1,4 @@
-import { callLLM } from "@/lib/llm";
+import { callLLM, readAIPref } from "@/lib/llm";
 import { ParseRequestSchema, ParseResultSchema, type ParseResult } from "@/lib/schemas";
 import { errorResponse, guard, okResponse, readJsonBody } from "@/lib/server/guard";
 import { PARSER_SYSTEM, buildParserUserMessage } from "@/lib/server/prompts";
@@ -27,6 +27,7 @@ export async function POST(req: Request) {
   }
 
   const result = await callLLM({
+    pref: readAIPref(req),
     task: "parse",
     system: PARSER_SYSTEM,
     messages: [{ role: "user", content: buildParserUserMessage(parsed.data) }],

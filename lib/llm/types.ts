@@ -13,6 +13,9 @@ export type LLMResult<T> = { ok: true; data: T } | { ok: false; error: { code: L
 
 export type Effort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Someone's model / thinking choice from Settings. The server only honours models on its list. */
+export type AIPref = { model?: string; effort?: Effort };
+
 /** One request as an adapter sees it. `schema` is a strict JSON Schema (already converted). */
 export type ProviderRequest = {
   model: string;

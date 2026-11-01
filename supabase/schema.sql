@@ -84,7 +84,7 @@ create index if not exists my_foods_user_updated on public.my_foods (user_id, up
 -- coach's memory and chat history. Size-capped so one row can't grow unbounded.
 create table if not exists public.records (
   user_id uuid not null default auth.uid() references auth.users on delete cascade,
-  kind text not null check (kind in ('weight', 'meal', 'recipe', 'memory', 'chat')),
+  kind text not null check (kind in ('weight', 'meal', 'recipe', 'memory', 'chat', 'water')),
   key text not null check (length(key) between 1 and 100),
   data jsonb check (data is null or pg_column_size(data) <= 65536),
   deleted boolean not null default false,
@@ -92,6 +92,9 @@ create table if not exists public.records (
   primary key (user_id, kind, key)
 );
 create index if not exists records_user_updated on public.records (user_id, updated_at);
+-- Kinds added later (water): widen the check on databases created before them.
+alter table public.records drop constraint if exists records_kind_check;
+alter table public.records add constraint records_kind_check check (kind in ('weight', 'meal', 'recipe', 'memory', 'chat', 'water'));
 
 do $$
 declare t text;

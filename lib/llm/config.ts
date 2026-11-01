@@ -6,8 +6,9 @@
  *   LLM_PARSER_MODEL / LLM_VISION_MODEL / LLM_COACH_MODEL
  *   LLM_REASONING_EFFORT   none|minimal|low|medium|high|xhigh|max (where supported)
  *   LLM_BASE_URL           endpoint for LLM_PROVIDER=compatible (any OpenAI-compatible API)
+ *   LLM_MODEL_CHOICES      optional, comma-separated: more models people can pick in Settings
  */
-import type { Effort, LLMTask } from "./types";
+import type { AIPref, Effort, LLMTask } from "./types";
 
 export const PROVIDERS = ["anthropic", "openai", "gemini", "groq", "openrouter", "deepseek", "xai", "mistral", "compatible"] as const;
 export type Provider = (typeof PROVIDERS)[number];
@@ -29,7 +30,13 @@ const DEFAULT_MODELS: Partial<Record<Provider, Record<LLMTask, string>>> = {
 };
 const DEFAULT_EFFORT: Partial<Record<Provider, Effort>> = { openai: "low" };
 
-const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** Models people can switch to in Settings, besides the ones configured in env. All accept images. */
+const MODEL_CHOICES: Partial<Record<Provider, string[]>> = {
+  openai: ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-5.5", "gpt-5.4-mini"],
+  anthropic: ["claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5-5"],
+};
+
+export const EFFORTS: Effort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function inferProvider(key: string): Provider | null {
   if (key.startsWith("sk-ant-")) return "anthropic";
@@ -79,4 +86,26 @@ export function resolveConfig(env: Record<string, string | undefined> = process.
   const effort = (e as Effort | undefined) ?? DEFAULT_EFFORT[provider];
 
   return { ok: true, config: { provider, apiKey, baseURL, models: models as Record<LLMTask, string>, effort } };
+}
+
+/** What Settings can offer: the configured models, the built-in list, then LLM_MODEL_CHOICES. */
+export function modelChoices(config: LLMConfig, env: Record<string, string | undefined> = process.env): string[] {
+  const extra = (env.LLM_MODEL_CHOICES ?? "").split(",").map((m) => m.trim()).filter(Boolean);
+  return [...new Set([...Object.values(config.models), ...(MODEL_CHOICES[config.provider] ?? []), ...extra])];
+}
+
+/**
+ * Apply a Settings choice. The key is the owner's, so only listed models are
+ * honoured (anything else falls back to the configured model), and the chosen
+ * model serves every task.
+ */
+export function applyPref(config: LLMConfig, pref: AIPref | undefined, env: Record<string, string | undefined> = process.env): LLMConfig {
+  if (!pref) return config;
+  const model = pref.model && modelChoices(config, env).includes(pref.model) ? pref.model : undefined;
+  const effort = pref.effort && EFFORTS.includes(pref.effort) ? pref.effort : undefined;
+  return {
+    ...config,
+    models: model ? { parse: model, vision: model, coach: model } : config.models,
+    effort: effort ?? config.effort,
+  };
 }

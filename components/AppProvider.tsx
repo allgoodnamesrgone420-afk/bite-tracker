@@ -12,7 +12,8 @@ import { LogItemSchema, ParsedItemSchema, type ApiErrorCode, type DayLog, type L
 import { supabase, syncConfigured } from "@/lib/supabase";
 import { syncNow } from "@/lib/sync";
 import { computeTargets, type Adapt, type TargetCalc } from "@/lib/targets";
-import { dateKey, mealForTime, sumItems } from "@/lib/totals";
+import { logDayKey, mealForTime, sumItems } from "@/lib/totals";
+import { addWater, type WaterLog } from "@/lib/water";
 import { currentWeight, estimateTdee, type TdeeEstimate, type Weights } from "@/lib/weight";
 
 export type DraftItem = ParsedItem & {
@@ -33,7 +34,8 @@ export type Sheet =
   | { kind: "error"; text: string; code: ApiErrorCode; message: string; retry?: ParseRequest }
   | { kind: "passcode"; retry: ParseRequest }
   | { kind: "nonfood"; text: string }
-  | { kind: "edit"; item: LogItem }
+  /** `date`: the day the item is logged on (today when absent). */
+  | { kind: "edit"; item: LogItem; date?: string }
   /** The "+" menu: manual entry, barcode, saved meals. */
   | { kind: "add"; text: string }
   | { kind: "barcode" }
@@ -62,6 +64,9 @@ type AppState = {
   online: boolean;
   today: string;
   day: DayLog;
+  /** A past day that new food goes into (from Progress), or null for today. */
+  logDate: string | null;
+  setLogDate: (date: string | null) => void;
   summaries: Record<string, DaySummary>;
   profile: Profile | null;
   overrides: TargetOverrides;
@@ -70,6 +75,7 @@ type AppState = {
   adapt: Adapt;
   tdee: TdeeEstimate | null;
   weights: Weights;
+  water: WaterLog;
   meals: Record<string, SavedMeal>;
   recipes: Record<string, Recipe>;
   /** Display name: from the account, or this device in local-only mode. */
@@ -92,7 +98,7 @@ type AppState = {
   saveSettings: (p: Profile, o: TargetOverrides) => Promise<void>;
   submitPasscode: (code: string, retry: ParseRequest) => Promise<void>;
   forgetFood: (key: string) => Promise<void>;
-  updateItem: (id: string, rows: DraftItem[]) => Promise<void>;
+  updateItem: (id: string, rows: DraftItem[], date?: string) => Promise<void>;
   correctItem: (item: ParsedItem, text: string) => Promise<CorrectionResult>;
   quickAdd: (key: string) => void;
   repeatItems: (items: LogItem[], label: string, meal?: Meal) => void;
@@ -102,6 +108,8 @@ type AppState = {
   openReview: (items: ParsedItem[], text: string, engine: Engine) => void;
   logWeight: (date: string, kg: number) => Promise<void>;
   deleteWeight: (date: string) => Promise<void>;
+  /** Add (or with a negative amount, remove) water for a day. */
+  logWater: (date: string, deltaMl: number) => Promise<void>;
   saveMeal: (name: string, items: ParsedItem[], then?: Sheet) => Promise<void>;
   deleteMeal: (id: string) => Promise<void>;
   logSavedMeal: (id: string) => void;
@@ -142,8 +150,8 @@ function subscribeOnline(cb: () => void) {
 }
 
 async function loadSnapshot() {
-  const date = dateKey();
-  const [profile, overrides, day, summaries, myFoods, weights, meals, recipes, localName] = await Promise.all([
+  const date = logDayKey();
+  const [profile, overrides, day, summaries, myFoods, weights, meals, recipes, localName, water] = await Promise.all([
     db.getProfile(),
     db.getOverrides(),
     db.getDay(date),
@@ -153,8 +161,9 @@ async function loadSnapshot() {
     db.getRecords<SavedMeal>("meal"),
     db.getRecords<Recipe>("recipe"),
     db.getLocalName(),
+    db.getRecords<WaterLog[string]>("water"),
   ]);
-  return { profile: profile ?? null, overrides, day, summaries, myFoods, weights, meals, recipes, localName: localName ?? "" };
+  return { profile: profile ?? null, overrides, day, summaries, myFoods, weights, meals, recipes, localName: localName ?? "", water };
 }
 
 export const blankRow = (name = "", meal: Meal = mealForTime(), needsInput = false): DraftItem => ({
@@ -187,7 +196,7 @@ const localRows = (local: LocalParse): DraftItem[] => [
 export function AppProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
-  const [day, setDay] = useState<DayLog>(() => ({ date: dateKey(), items: [] }));
+  const [day, setDay] = useState<DayLog>(() => ({ date: logDayKey(), items: [] }));
   const [summaries, setSummaries] = useState<Record<string, DaySummary>>({});
   const [profile, setProfile] = useState<Profile | null>(null);
   const [overrides, setOverrides] = useState<TargetOverrides>({});
@@ -198,11 +207,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<Account>({ configured: syncConfigured, ready: !syncConfigured, user: null, recovering: false });
   const [sync, setSync] = useState<SyncState>({ status: "off", lastSyncedAt: null });
   const [weights, setWeights] = useState<Weights>({});
+  const [water, setWater] = useState<WaterLog>({});
   const [meals, setMeals] = useState<Record<string, SavedMeal>>({});
   const [recipes, setRecipes] = useState<Record<string, Recipe>>({});
   const [localName, setLocalName] = useState("");
   const [dataVersion, setDataVersion] = useState(0);
   const today = day.date;
+  const [backfill, setBackfill] = useState<string | null>(null);
+  // Logging "into" today is just normal logging.
+  const logDate = backfill && backfill < today ? backfill : null;
+  const setLogDate = useCallback((d: string | null) => setBackfill(d), []);
   const name = (syncConfigured ? account.user?.name : localName) ?? "";
 
   // Targets: formula first, then refined by your trend weight and (when there's
@@ -226,11 +240,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const dayRef = useRef(day);
   const foodsRef = useRef(myFoods);
   const calcRef = useRef(calc);
+  const logDateRef = useRef(logDate);
   useEffect(() => {
     dayRef.current = day;
     foodsRef.current = myFoods;
     calcRef.current = calc;
-  }, [day, myFoods, calc]);
+    logDateRef.current = logDate;
+  }, [day, myFoods, calc, logDate]);
 
   const applySnapshot = useCallback((snap: Awaited<ReturnType<typeof loadSnapshot>>) => {
     setProfile(snap.profile);
@@ -239,6 +255,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSummaries(snap.summaries);
     setMyFoods(snap.myFoods);
     setWeights(snap.weights);
+    setWater(snap.water);
     setMeals(snap.meals);
     setRecipes(snap.recipes);
     setLocalName(snap.localName);
@@ -251,9 +268,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let live = true;
     loadSnapshot().then((snap) => live && applySnapshot(snap));
-    // Midnight rollover: re-check the date when the tab regains focus and once a minute.
+    // Day rollover (at DAY_START_HOUR): re-check the date when the tab regains focus and once a minute.
     const tick = () => {
-      if (dateKey() !== dayRef.current.date) loadSnapshot().then((snap) => live && applySnapshot(snap));
+      if (logDayKey() !== dayRef.current.date) loadSnapshot().then((snap) => live && applySnapshot(snap));
     };
     const interval = setInterval(tick, 60_000);
     document.addEventListener("visibilitychange", tick);
@@ -517,9 +534,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSheet({ kind: "review", text: name, rows: [blankRow(name.slice(0, 80))], engine: "manual" });
   }, []);
 
+  /** Today's log from state, any other day from the device store. */
+  const loadDay = useCallback((date: string) => (date === dayRef.current.date ? Promise.resolve(dayRef.current) : db.getDay(date)), []);
+
   const persistDay = useCallback(async (next: DayLog) => {
-    setDay(next);
-    setSummaries(await db.saveDay(next, calcRef.current?.targets));
+    const isToday = next.date === dayRef.current.date;
+    if (isToday) setDay(next);
+    // A past day keeps the target it was logged against.
+    setSummaries(await db.saveDay(next, isToday ? calcRef.current?.targets : undefined));
   }, []);
 
   const commitRows = useCallback(
@@ -531,7 +553,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         LogItemSchema.parse({ ...r, name: r.name.trim(), unit: r.unit.trim() || "serving", id: uid(), createdAt: now }),
       );
       if (!items.length) return;
-      const current = await db.getDay(dateKey());
+      const date = logDateRef.current ?? dayRef.current.date;
+      const current = await db.getDay(date);
       await persistDay({ ...current, items: [...current.items, ...items] });
       // Remember every food; hand-edited numbers become your calibrated values.
       const learned = learnFoods(foodsRef.current, valid);
@@ -539,7 +562,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void db.saveMyFoods(learned);
       setSheet({ kind: "closed" });
       const t = sumItems(items);
-      showToast(`Logged ${items.length} item${items.length > 1 ? "s" : ""} · ${t.calories.toLocaleString("en-IN")} kcal`);
+      const to = date === dayRef.current.date ? "" : ` to ${new Date(`${date}T00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}`;
+      showToast(`Logged ${items.length} item${items.length > 1 ? "s" : ""}${to} · ${t.calories.toLocaleString("en-IN")} kcal`);
     },
     [persistDay, showToast],
   );
@@ -574,8 +598,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   /** Replace a logged item with edited row(s); edited numbers calibrate the food. */
   const updateItem = useCallback(
-    async (id: string, rows: DraftItem[]) => {
-      const before = dayRef.current;
+    async (id: string, rows: DraftItem[], date = dayRef.current.date) => {
+      const before = await loadDay(date);
       const idx = before.items.findIndex((i) => i.id === id);
       if (idx === -1) return;
       const old = before.items[idx];
@@ -590,11 +614,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       void db.saveMyFoods(learned);
       setSheet({ kind: "closed" });
       showToast(replaced.length ? `Updated ${replaced[0].name}` : `Removed ${old.name}`, () => {
-        const cur = dayRef.current;
-        void persistDay({ ...cur, items: before.items });
+        void loadDay(date).then((cur) => persistDay({ ...cur, items: before.items }));
       });
     },
-    [persistDay, showToast],
+    [loadDay, persistDay, showToast],
   );
 
   /** "That was 1 tbsp of oil, not 3" → AI correction, with a conservative offline fallback. */
@@ -655,6 +678,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     delete next[date];
     await db.saveRecords("weight", next);
     setWeights(next);
+  }, []);
+
+  // Taps are queued: each one reads the store after the last one saved, so quick taps all count.
+  const waterQueue = useRef<Promise<void>>(Promise.resolve());
+  const logWater = useCallback((date: string, deltaMl: number) => {
+    waterQueue.current = waterQueue.current.then(async () => {
+      const next = addWater(await db.getRecords<WaterLog[string]>("water"), date, deltaMl);
+      await db.saveRecords("water", next);
+      setWater(next);
+    }).catch(() => {}); // one failed write mustn't stall the taps after it
+    return waterQueue.current;
   }, []);
 
   /* --------------------------- meals & recipes --------------------------- */
@@ -791,6 +825,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     online,
     today,
     day,
+    logDate,
+    setLogDate,
     summaries,
     profile,
     overrides,
@@ -828,6 +864,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     openReview,
     logWeight,
     deleteWeight,
+    water,
+    logWater,
     saveMeal,
     deleteMeal,
     logSavedMeal,

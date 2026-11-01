@@ -28,6 +28,8 @@ export type Food = {
   addon?: number;
   /** Mentioning this food alone is too vague to estimate well (asks AI when available). */
   vague?: boolean;
+  /** Name of the unsweetened version, used for "diet coke", "chai without sugar", "sugar free coffee". */
+  sugarFree?: string;
 };
 
 const per100 = <T extends number[]>(a: [...T]): T => a.map((v) => v / 100) as T;
@@ -245,16 +247,20 @@ export const FOODS: Food[] = [
   { name: "Papad", aliases: ["papad", "papads", "papadum", "appalam"], unit: "piece", grams: 12, n: [40, 2.5, 7, 0.4, 1.5], m: [200, 0.2, 0.1, 10, 0.6], addon: 1 },
 
   // ---------- drinks ----------
-  { name: "Chai (milk + sugar)", aliases: ["chai", "tea", "masala chai", "milk tea", "adrak chai"], unit: "cup", grams: 150, n: [105, 3, 14, 4, 0], m: [30, 12, 2.5, 100, 0.3] },
+  { name: "Chai (milk + sugar)", aliases: ["chai", "tea", "masala chai", "milk tea", "adrak chai"], unit: "cup", grams: 150, n: [105, 3, 14, 4, 0], m: [30, 12, 2.5, 100, 0.3], sugarFree: "Chai (no sugar)" },
+  { name: "Chai (no sugar)", aliases: ["pheeki chai", "feeki chai", "fiki chai"], unit: "cup", grams: 150, n: [65, 3, 4.5, 4, 0], m: [30, 4, 2.5, 100, 0.3] },
   { name: "Black coffee", aliases: ["black coffee", "americano", "espresso"], unit: "cup", grams: 240, n: [5, 0.3, 0, 0, 0], m: [5, 0, 0, 5, 0.1] },
-  { name: "Coffee (milk + sugar)", aliases: ["coffee", "filter coffee", "cappuccino", "latte", "cold coffee"], unit: "cup", grams: 200, n: [110, 4, 14, 4, 0], m: [40, 13, 2.5, 120, 0.1] },
+  { name: "Coffee (milk + sugar)", aliases: ["coffee", "filter coffee", "cappuccino", "latte", "cold coffee"], unit: "cup", grams: 200, n: [110, 4, 14, 4, 0], m: [40, 13, 2.5, 120, 0.1], sugarFree: "Coffee (no sugar)" },
+  { name: "Coffee (no sugar)", aliases: ["pheeki coffee", "feeki coffee"], unit: "cup", grams: 200, n: [70, 4, 5, 4, 0], m: [40, 4.5, 2.5, 120, 0.1] },
   { name: "Green tea", aliases: ["green tea", "black tea"], unit: "cup", grams: 240, n: [2, 0, 0.5, 0, 0], m: [2, 0, 0, 0, 0.1] },
-  { name: "Soft drink", aliases: ["coke", "pepsi", "cola", "soft drink", "soda", "sprite", "thums up", "thumbs up", "fanta", "limca"], unit: "can", grams: 330, n: [140, 0, 35, 0, 0], m: [30, 35, 0, 5, 0] },
+  { name: "Soft drink", aliases: ["coke", "pepsi", "cola", "soft drink", "soda", "sprite", "thums up", "thumbs up", "fanta", "limca"], unit: "can", grams: 330, n: [140, 0, 35, 0, 0], m: [30, 35, 0, 5, 0], sugarFree: "Diet soft drink" },
   { name: "Diet soft drink", aliases: ["diet coke", "coke zero", "diet pepsi", "pepsi black", "diet soda", "zero sugar soda"], unit: "can", grams: 330, n: [1, 0, 0, 0, 0], m: [40, 0, 0, 0, 0] },
-  { name: "Energy drink", aliases: ["energy drink", "red bull", "redbull", "monster"], unit: "can", grams: 250, n: [110, 0, 28, 0, 0], m: [100, 27, 0, 0, 0] },
+  { name: "Energy drink", aliases: ["energy drink", "red bull", "redbull", "monster"], unit: "can", grams: 250, n: [110, 0, 28, 0, 0], m: [100, 27, 0, 0, 0], sugarFree: "Sugar-free energy drink" },
+  { name: "Sugar-free energy drink", aliases: ["monster ultra"], unit: "can", grams: 250, n: [5, 0, 1, 0, 0], m: [100, 0, 0, 0, 0] },
   { name: "Fresh juice", aliases: ["juice", "orange juice", "mosambi juice", "fruit juice", "apple juice"], unit: "glass", grams: 250, n: [115, 1.5, 27, 0.4, 0.5], m: [5, 21, 0, 25, 0.5] },
   { name: "Sugarcane juice", aliases: ["sugarcane juice", "ganne ka ras", "ganne ka juice"], unit: "glass", grams: 250, n: [180, 0.3, 45, 0.3, 0], m: [40, 40, 0, 20, 0.8] },
-  { name: "Nimbu pani", aliases: ["nimbu pani", "shikanji", "lemonade", "nimbu soda"], unit: "glass", grams: 250, n: [60, 0.1, 15, 0, 0.2], m: [300, 14, 0, 5, 0.1] },
+  { name: "Nimbu pani", aliases: ["nimbu pani", "shikanji", "lemonade", "nimbu soda"], unit: "glass", grams: 250, n: [60, 0.1, 15, 0, 0.2], m: [300, 14, 0, 5, 0.1], sugarFree: "Nimbu pani (no sugar)" },
+  { name: "Nimbu pani (no sugar)", aliases: ["namkeen nimbu pani", "salted nimbu pani", "namkeen shikanji", "salted lemonade"], unit: "glass", grams: 250, n: [8, 0.1, 2, 0, 0.2], m: [300, 1, 0, 5, 0.1] },
   { name: "Lemon water", aliases: ["lemon water", "warm lemon water", "detox water"], unit: "glass", grams: 250, n: [5, 0, 1.5, 0, 0], m: [5, 0.5, 0, 5, 0] },
   { name: "Beer", aliases: ["beer", "beers", "lager"], unit: "bottle", grams: 330, n: [150, 1.6, 13, 0, 0], m: [14, 0, 0, 14, 0.1] },
   { name: "Wine", aliases: ["wine", "red wine", "white wine"], unit: "glass", grams: 150, n: [125, 0.1, 4, 0, 0], m: [7, 1.4, 0, 12, 0.7] },

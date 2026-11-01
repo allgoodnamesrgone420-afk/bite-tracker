@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useApp } from "@/components/AppProvider";
 import { BarList, Donut, WeightChart } from "@/components/charts";
+import { MicrosCard } from "@/components/MicrosCard";
 import { Icon, PopButton, fmtG, fmtInt, useDesktop } from "@/components/ui";
 import { foodKey } from "@/lib/calibration";
 import * as db from "@/lib/db";
@@ -12,6 +13,7 @@ import { STATUS_META, classifyDay, lastNDates, monthGrid, rangeStats, targetStre
 import { MEALS, type DayLog, type Profile } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
 import { addDays, sumItems } from "@/lib/totals";
+import { fmtLitres, waterTarget } from "@/lib/water";
 import { currentWeight, trendSeries, weeklyRate } from "@/lib/weight";
 
 /** Chart fills: theme tokens validated for CVD separation (see globals.css). */
@@ -25,8 +27,13 @@ const statusText = (status: DayStatus, isToday: boolean) => (isToday && status !
 const fmtDate = (d: string, opts: Intl.DateTimeFormatOptions) => new Date(`${d}T00:00`).toLocaleDateString("en-IN", opts);
 
 export default function ProgressPage() {
-  const { ready, summaries, calc, today, profile } = useApp();
+  const { ready, summaries, calc, today, profile, logDate, setLogDate } = useApp();
   const [selected, setSelected] = useState<string | null>(null);
+  const select = (d: string) => {
+    setSelected(d);
+    // While adding to a past day, the target follows the day you pick (today ends it).
+    if (logDate) setLogDate(d);
+  };
   if (!ready) return <p className="label pulse pt-10">Loading…</p>;
   if (!calc) {
     return (
@@ -39,7 +46,7 @@ export default function ProgressPage() {
       </div>
     );
   }
-  return <Progress rows={summaries} fallback={calc.targets} today={today} selected={selected ?? today} onSelect={setSelected} sex={profile?.sex} />;
+  return <Progress rows={summaries} fallback={calc.targets} today={today} selected={selected ?? today} onSelect={select} sex={profile?.sex} />;
 }
 
 function Title() {
@@ -171,7 +178,7 @@ function useRangeDays(dates: string[], rows: Record<string, DayRow>): DayLog[] |
 /* ------------------------------ weight ------------------------------ */
 
 function WeightCard({ today }: { today: string }) {
-  const { weights, logWeight, deleteWeight, tdee, calc, profile } = useApp();
+  const { weights, logWeight, deleteWeight, tdee, calc, profile, showToast } = useApp();
   const [kg, setKg] = useState("");
   const [date, setDate] = useState(today);
   const [msg, setMsg] = useState<string | null>(null);
@@ -211,6 +218,7 @@ function WeightCard({ today }: { today: string }) {
           await logWeight(date, v);
           setKg("");
           setMsg(null);
+          showToast(`Weigh-in saved · ${v.toFixed(1)} kg${date === today ? "" : ` on ${fmtDate(date, { day: "numeric", month: "short" })}`}`);
         }}
       >
         <label className="field compact">
@@ -450,8 +458,16 @@ function BarChart({ rows, dates, fallback, selected, onSelect }: { rows: Record<
         <p className="num text-[11px] text-ink-3">target {fmtInt(fallback.calories)}</p>
       </div>
       {/* Readout (works for hover, tap and keyboard). Fixed height so the chart never shifts under the pointer. */}
-      <div className="num mt-2 h-11 overflow-hidden text-sm">
-        <p className="truncate">
+      <div className="num relative mt-2 h-11 overflow-hidden text-sm">
+        {/* Phones: the day panel is far below the chart, so offer a jump to it. */}
+        <button
+          type="button"
+          className="press absolute right-0 top-0 bg-elevated px-2 py-1 text-[11px] font-bold uppercase tracking-[0.08em] text-ink-2 hover:text-ink lg:hidden"
+          onClick={() => document.getElementById("day-detail")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+        >
+          Details ↓
+        </button>
+        <p className="truncate pr-20 lg:pr-0">
           <span className="font-bold">{fmtDate(focus, { weekday: "short", day: "numeric", month: "short" })}</span>
           {fc && fr ? (
             <>
@@ -617,16 +633,18 @@ function Calendar({ rows, fallback, today, selected, onSelect, frozen }: { rows:
 /* ------------------------------- day detail ------------------------------- */
 
 function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow; fallback: Targets; today: string }) {
-  const { repeatItems } = useApp();
+  const { repeatItems, setSheet, logDate, setLogDate, profile } = useApp();
   const [log, setLog] = useState<DayLog | null>(null);
-  const count = row?.count ?? 0;
+  const past = date < today;
+  const adding = logDate === date;
   useEffect(() => {
     let live = true;
     db.getDay(date).then((d) => live && setLog(d));
     return () => {
       live = false;
     };
-  }, [date, count]);
+    // `row` is replaced whenever any day is saved, so edits show up here too.
+  }, [date, row]);
 
   const target = row?.target ?? fallback;
   const items = log?.date === date ? log.items : [];
@@ -635,7 +653,7 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
   const title = date === today ? "Today" : fmtDate(date, { weekday: "long", day: "numeric", month: "long" });
 
   return (
-    <section className="card p-4" style={{ ["--i" as string]: 6 }} aria-live="polite">
+    <section id="day-detail" className="card scroll-mt-20 p-4" style={{ ["--i" as string]: 6 }} aria-live="polite">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="label">Day detail</p>
@@ -647,6 +665,22 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
           </span>
         )}
       </div>
+      {past && (
+        <div className="mt-3">
+          {adding ? (
+            <p className="flex items-center justify-between gap-2 border border-lime p-2.5 text-xs font-semibold">
+              <span>Type what you ate in the food box. It goes into this day.</span>
+              <button className="shrink-0 font-bold uppercase tracking-[0.08em] text-ink-2 underline decoration-lime decoration-2 underline-offset-4 hover:text-ink" onClick={() => setLogDate(null)}>
+                Done
+              </button>
+            </p>
+          ) : (
+            <PopButton variant="ghost" size="sm" block onClick={() => setLogDate(date)}>
+              <Icon.plus size={14} /> Add food to this day
+            </PopButton>
+          )}
+        </div>
+      )}
       {!items.length ? (
         <p className="mt-3 text-sm text-ink-3">Nothing logged this day.</p>
       ) : (
@@ -680,7 +714,7 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
                       <span className="h-2.5 w-2.5" style={{ background: MEAL_STYLE[m].color }} aria-hidden="true" />
                       {MEAL_STYLE[m].label} · <span className="num">{fmtInt(sumItems(mi).calories)} kcal</span>
                     </p>
-                    {date !== today && (
+                    {past && !adding && (
                       <button
                         className="text-[11px] font-bold uppercase tracking-[0.1em] text-ink-2 underline decoration-lime decoration-2 underline-offset-4 hover:text-ink"
                         onClick={() => repeatItems(mi, `${MEAL_STYLE[m].label} from ${fmtDate(date, { weekday: "short", day: "numeric", month: "short" })}`)}
@@ -690,13 +724,19 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
                       </button>
                     )}
                   </div>
-                  <ul className="mt-1 space-y-0.5">
+                  <ul className="mt-1">
                     {mi.map((i) => (
-                      <li key={i.id} className="num flex justify-between gap-2 text-sm">
-                        <span className="truncate text-ink-2">
-                          {fmtG(i.quantity)} {i.unit} {i.name}
-                        </span>
-                        <span className="shrink-0">{fmtInt(i.calories)}</span>
+                      <li key={i.id}>
+                        <button
+                          className="num -mx-1.5 flex w-[calc(100%+12px)] justify-between gap-2 px-1.5 py-1 text-left text-sm hover:bg-elevated"
+                          onClick={() => setSheet({ kind: "edit", item: i, date: past ? date : undefined })}
+                          aria-label={`Edit ${i.name}, ${Math.round(i.calories)} kcal`}
+                        >
+                          <span className="truncate text-ink-2">
+                            {fmtG(i.quantity)} {i.unit} {i.name}
+                          </span>
+                          <span className="shrink-0">{fmtInt(i.calories)}</span>
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -704,9 +744,32 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
               );
             })}
           </div>
+          <div className="mt-4">
+            <MicrosCard items={items} calories={target.calories} sex={profile?.sex} title="Micronutrients this day" compact />
+          </div>
         </>
       )}
+      <DayWater date={date} />
     </section>
+  );
+}
+
+function DayWater({ date }: { date: string }) {
+  const { water, calc } = useApp();
+  const ml = water[date]?.ml ?? 0;
+  if (!ml) return null;
+  const target = waterTarget(calc?.weightKg);
+  return (
+    <div className="mt-4 grid grid-cols-[52px_1fr_auto] items-center gap-2 border-t border-line pt-3">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-2">Water</span>
+      <div className="h-2 bg-elevated">
+        <div className="h-full bg-water" style={{ width: `${Math.min(100, (ml / target) * 100)}%` }} />
+      </div>
+      <span className="num text-right text-xs">
+        {fmtLitres(ml)}
+        <span className="text-ink-3"> / {fmtLitres(target)}</span>
+      </span>
+    </div>
   );
 }
 

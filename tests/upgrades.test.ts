@@ -3,7 +3,7 @@ import { offToItem } from "@/lib/barcode";
 import { applyMemory, buildDigest, historyFor, localAnswer, trimChat, type StoredMessage } from "@/lib/chat";
 import { localParse } from "@/lib/local-parser";
 import { perServing, recipeFood, type Recipe } from "@/lib/library";
-import { microStatus, microTargets, microsFor, scaleMicros, sumMicros } from "@/lib/micros";
+import { microSources, microStatus, microTargets, microsFor, scaleMicros, sumMicros } from "@/lib/micros";
 import { ChatRequestSchema, type ParsedItem, type Profile } from "@/lib/schemas";
 import { buildChatMessages } from "@/lib/server/prompts";
 import { applyRemoteRecords, diffRecords } from "@/lib/sync-core";
@@ -213,6 +213,8 @@ describe("coach memory and chat", () => {
     const calc = computeTargets(profile);
     expect(localAnswer("What's left today?", { calc, todayItems: [{ ...item(), id: "1", source: "manual", createdAt: 0 }] })).toMatch(/kcal left, .* protein to go/);
     expect(localAnswer("plan my dinner", { calc, todayItems: [] })).toBeNull();
+    expect(localAnswer("whats left", { calc, todayItems: [], waterMl: 1000 })).toMatch(/Water: .* L to go\./);
+    expect(localAnswer("whats left", { calc, todayItems: [], waterMl: 5000 })).toMatch(/Water: done\./);
   });
 
   it("builds a compact digest of the logs", () => {
@@ -313,5 +315,23 @@ describe("recipes", () => {
 
   it("leaves micros out if any ingredient lacks them", () => {
     expect(perServing({ ...r, ingredients: [...r.ingredients, item()] }).m).toBeUndefined();
+  });
+});
+
+describe("microSources", () => {
+  const m = (sodium_mg: number, sugar_g = 0) => ({ sodium_mg, sugar_g, satfat_g: 0, calcium_mg: 0, iron_mg: 0 });
+  it("ranks foods by how much they added, merging repeats", () => {
+    const items = [
+      { name: "Maggi", micros: m(800) },
+      { name: "Roti", micros: m(100) },
+      { name: "maggi ", micros: m(400) },
+      { name: "Old item" },
+      { name: "Coke", micros: m(30, 35) },
+    ];
+    const s = microSources(items, "sodium_mg");
+    expect(s.map((x) => [x.name, x.value])).toEqual([["Maggi", 1200], ["Roti", 100], ["Coke", 30]]);
+    expect(s[0].share).toBeCloseTo(1200 / 1330);
+    expect(microSources(items, "sugar_g")).toEqual([{ name: "Coke", value: 35, share: 1 }]);
+    expect(microSources(items, "iron_mg")).toEqual([]);
   });
 });

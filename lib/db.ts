@@ -1,4 +1,5 @@
 "use client";
+import type { AIPref } from "./llm/types";
 import { clear, createStore, del, entries, get, getMany, set, setMany, update } from "idb-keyval";
 import { z } from "zod";
 import {
@@ -143,6 +144,9 @@ export const getPasscode = () => get<string>("passcode", store);
 export const getLocalName = () => get<string>("name", store);
 export const saveLocalName = (n: string) => (n ? set("name", n, store) : del("name", store));
 export const savePasscode = (p: string) => (p ? set("passcode", p, store) : del("passcode", store));
+/** Model / thinking choice from Settings, for this device. */
+export const getAIPref = async (): Promise<AIPref> => (await get<AIPref>("aiPref", store)) ?? {};
+export const saveAIPref = (p: AIPref) => (p.model || p.effort ? set("aiPref", p, store) : del("aiPref", store));
 
 export async function getDay(date: string): Promise<DayLog> {
   return (await get<DayLog>(`day:${date}`, store)) ?? { date, items: [] };

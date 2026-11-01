@@ -8,7 +8,7 @@ import { microTargets, sumMicros } from "./micros";
 import { classifyDay } from "./progress";
 import type { CoachResponse, DayLog, LogItem, Profile } from "./schemas";
 import type { Targets } from "./targets";
-import { sumItems } from "./totals";
+import { DAY_START_HOUR, sumItems } from "./totals";
 
 export type Insight = {
   id: string;
@@ -273,7 +273,8 @@ export function computeInsights({ today, days, targets: t, profile, now = new Da
 
   // ---------- rest of today ----------
   const todayLog = logged.find((d) => d.date === today);
-  if (todayLog && now.getHours() < 21) {
+  // Between midnight and 4 am "today" is last night, which is done.
+  if (todayLog && now.getHours() >= DAY_START_HOUR && now.getHours() < 21) {
     const tot = sumItems(todayLog.items);
     const kcalLeft = t.calories - tot.calories;
     const pLeft = t.protein_g - tot.protein_g;

@@ -165,7 +165,7 @@ function Chat({
   memory: Memory;
   saveMemory: (m: Memory) => Promise<void>;
 }) {
-  const { online, summaries, weights, tdee, dataVersion, name } = useApp();
+  const { online, summaries, weights, tdee, dataVersion, name, water } = useApp();
   const [log, setLog] = useState<ChatLog>({ messages: [] });
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -200,7 +200,7 @@ function Chat({
     const todayItems = days.find((d) => d.date === today)?.items ?? [];
 
     // Simple number questions are answered on the device: free and instant.
-    const local = localAnswer(t, { calc, todayItems });
+    const local = localAnswer(t, { calc, todayItems, waterMl: water[today]?.ml });
     if (local) {
       setText("");
       await persist([...log.messages, { ...userMsg, local: true }, { role: "assistant", content: local, at: now, local: true, followUps: ["Plan my next meal", "High-protein snack ideas"] }]);

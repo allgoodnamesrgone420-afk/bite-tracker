@@ -99,6 +99,10 @@ function findSpans(tokens: string[], index: Map<string, Alias[]>): Span[] {
   return spans;
 }
 
+/** Marker token left in place of "no sugar", "sugar free", "diet", "zero". */
+const SUGAR_FREE = "sugarfreeword";
+const SODA = "coke|pepsi|cola|soda|soft drinks?|sprite|fanta|limca|thums up|thumbs up|7 ?up|mountain dew|red ?bull|monster";
+
 function normalise(text: string): string {
   return (
     ` ${text.toLowerCase()} `
@@ -106,9 +110,13 @@ function normalise(text: string): string {
       .replace(/¼/g, " 0.25 ")
       .replace(/¾/g, " 0.75 ")
       .replace(/(\d+)\s*\/\s*(\d+)/g, (_, a, b) => ` ${(Number(a) / Number(b)).toFixed(2)} `)
-      // negations: "no sugar", "without milk", "bina cheeni", "sugar free"
-      .replace(/\b(?:no|without|bina|zero|minus)\s+(?:added\s+)?(sugar|cheeni|chini|milk|doodh|ghee|butter|oil|cheese|cream|mayo)\b/g, " ")
-      .replace(/\b(sugar|cheeni)[\s-]?free\b/g, " ")
+      // "no sugar", "sugar free", "diet coke", "coke zero" become a marker that swaps in the unsweetened version
+      .replace(/\b(?:no|without|bina|zero|minus)\s+(?:added\s+)?(?:sugar|cheeni|chini)\b/g, ` ${SUGAR_FREE} `)
+      .replace(/\b(?:sugar|cheeni)[\s-]?(?:free|less)\b|\bunsweetened\b/g, ` ${SUGAR_FREE} `)
+      .replace(new RegExp(`\\b(?:diet|zero)\\s+(?=${SODA})`, "g"), ` ${SUGAR_FREE} `)
+      .replace(new RegExp(`\\b(${SODA})\\s+(?:zero|diet|black|max)\\b`, "g"), `$1 ${SUGAR_FREE} `)
+      // other negations: "without milk", "no ghee" (the add-on just isn't logged)
+      .replace(/\b(?:no|without|bina|minus)\s+(?:added\s+)?(milk|doodh|ghee|butter|oil|cheese|cream|mayo)\b/g, " ")
       // "one and a half", "2 and a half"
       .replace(/\b(\d+(?:\.\d+)?|one|two|three|ek|do|teen)\s+and\s+(?:a\s+)?half\b/g, (_, n) => ` ${(NUM_WORDS[n] ?? Number(n)) + 0.5} `)
       .replace(/\ba\s+half\b/g, " 0.5 ")
@@ -170,6 +178,18 @@ export function localParse(
     pendingWith = false;
   }
 
+  // "chai, no sugar" / "coffee with no sugar": a segment that's only the marker applies to the one before it.
+  const markerOnly = segments.map((s) => s.text.split(" ").every((t) => t === SUGAR_FREE));
+  const sugarFree = segments.map((s, i) => s.text.split(" ").includes(SUGAR_FREE) || !!markerOnly[i + 1]);
+  const personal = [...(opts.verified ?? []), ...(opts.learned ?? [])];
+  /** The unsweetened version, or null if we don't know one (a personal "Coke" points at the library's soft drink). */
+  const unsweetened = (food: Food): Food | null => {
+    if ((food.m?.[1] ?? 0) <= 1) return food; // already unsweetened
+    const variant = food.sugarFree ?? FOODS.find((f) => f.sugarFree && (f.name === food.name || f.aliases.includes(food.name.trim().toLowerCase())))?.sugarFree;
+    if (!variant) return null;
+    return personal.find((f) => f.name === variant) ?? FOODS.find((f) => f.name === variant) ?? null;
+  };
+
   type Out = ParsedItem & { segIndex: number };
   const out: Out[] = [];
   const unknown: string[] = [];
@@ -182,6 +202,7 @@ export function localParse(
     let meal: Meal | null = timeMeal;
     const used = new Set<number>();
     tokens.forEach((t, i) => {
+      if (t === SUGAR_FREE) used.add(i);
       if (MEAL_WORDS[t]) {
         meal = MEAL_WORDS[t];
         used.add(i);
@@ -196,6 +217,8 @@ export function localParse(
 
     const segVague = tokens.some((t) => VAGUE.has(t));
     const produced: Out[] = [];
+    // "Sugar free" something we only know sweetened: don't guess, let the AI (or you) fill it in.
+    let noSugarFreeVersion = false;
 
     spans.forEach((span, si) => {
       const prevEnd = si === 0 ? 0 : spans[si - 1].end;
@@ -233,7 +256,9 @@ export function localParse(
       }
       found.idx.forEach((k) => used.add(k));
 
-      const food = span.food;
+      const swapped = sugarFree[segIndex] ? unsweetened(span.food) : span.food;
+      if (!swapped) noSugarFreeVersion = true;
+      const food = swapped ?? span.food;
       let { unit: userUnit, size } = found;
       // "small bowl" is a katori; "big bowl" stays a bowl scaled up.
       if (userUnit === "bowl" && size < 1) {
@@ -287,8 +312,8 @@ export function localParse(
 
     // Anything meaningful left over means we don't really know this segment.
     const leftover = tokens.filter((t, i) => !used.has(i) && !STOP.has(t) && !VAGUE.has(t) && qtyOf(t) === null && !KNOWN_UNITS.has(t) && SIZE[t] === undefined && /[a-z]{3,}/.test(t));
-    if (leftover.length) {
-      unknown.push(segment.text.trim());
+    if (leftover.length || noSugarFreeVersion) {
+      unknown.push(segment.text.replaceAll(SUGAR_FREE, "sugar free").trim());
       return;
     }
     out.push(...produced);

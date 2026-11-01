@@ -59,6 +59,27 @@ export function sumMicros(items: { micros?: Micros }[]): MicroTotals {
   return { total, covered, count: items.length };
 }
 
+export type MicroSource = { name: string; value: number; share: number };
+
+/** Which foods a micronutrient came from, biggest first (same food logged twice is one row). */
+export function microSources(items: { name: string; micros?: Micros }[], key: MicroKey, limit = 5): MicroSource[] {
+  const byFood = new Map<string, { name: string; value: number }>();
+  let total = 0;
+  for (const i of items) {
+    const v = i.micros?.[key] ?? 0;
+    if (v <= 0) continue;
+    total += v;
+    const k = i.name.trim().toLowerCase();
+    const f = byFood.get(k) ?? { name: i.name.trim(), value: 0 };
+    f.value += v;
+    byFood.set(k, f);
+  }
+  return [...byFood.values()]
+    .sort((a, b) => b.value - a.value)
+    .slice(0, limit)
+    .map((f) => ({ name: f.name, value: r(key, f.value), share: f.value / total }));
+}
+
 /** Daily limits (sodium, sugar, sat fat) and minimums (calcium, iron). */
 export function microTargets(calories: number, sex: Profile["sex"] | undefined): Micros {
   return {
