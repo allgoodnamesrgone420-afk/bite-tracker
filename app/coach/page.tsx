@@ -11,6 +11,7 @@ import { lastNDates } from "@/lib/progress";
 import { CHAT_MAX_CHARS, type CoachRequest, type CoachResult, type DayLog, type Profile } from "@/lib/schemas";
 import type { TargetCalc, Targets } from "@/lib/targets";
 import { sumItems } from "@/lib/totals";
+import { fmtLitres, waterTarget } from "@/lib/water";
 
 type Mode = "daily" | "weekly";
 type Tab = "chat" | Mode;
@@ -43,11 +44,18 @@ export default function CoachPage() {
   return <Coach profile={profile} calc={calc} today={today} days={days} />;
 }
 
-function Title() {
+/** Compact on phones, so the conversation gets the screen. */
+function Title({ children }: { children?: React.ReactNode }) {
   return (
-    <header>
-      <p className="label">Coach</p>
-      <h1 className="text-2xl font-extrabold tracking-tight lg:text-3xl">What to change, from what you actually eat</h1>
+    <header className="flex items-center gap-3">
+      <span className="plunk face-violet flex h-11 w-11 shrink-0 items-center justify-center" style={{ ["--d" as string]: "3px" }} aria-hidden="true">
+        <Icon.coach size={22} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <h1 className="text-xl font-extrabold leading-tight tracking-tight lg:text-3xl">Coach</h1>
+        <p className="truncate text-xs text-ink-2 lg:text-sm">What to change, from what you actually eat</p>
+      </div>
+      {children}
     </header>
   );
 }
@@ -75,31 +83,46 @@ function Coach({ profile, calc, today, days }: { profile: Profile; calc: TargetC
   const desktop = useDesktop();
   const [tab, setTab] = useState<Tab>("chat");
   const [memory, saveMemory] = useMemory();
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const insights = useMemo(() => computeInsights({ today, days, targets, profile }), [today, days, targets, profile]);
   const memoryTexts = memory.facts.map((f) => f.text);
   const mode: Mode = tab === "weekly" ? "weekly" : "daily";
 
   const review = (m: Mode) => <Review key={m} mode={m} profile={profile} targets={targets} today={today} days={days} insights={insights} memory={memoryTexts} />;
-  const patterns = (
-    <section className="space-y-3" style={{ ["--i" as string]: 3 }}>
+  const patterns = insights.length > 0 && (
+    <section className="space-y-2.5" style={{ ["--i" as string]: 3 }}>
       <div>
         <p className="label">Patterns from your logs</p>
-        <p className="text-xs text-ink-2">Computed on your device from the last 14 days. Free, instant, always on.</p>
+        <p className="mt-0.5 text-[11px] text-ink-3">Last 14 days, worked out on your device. Free and instant.</p>
       </div>
       {insights.map((i) => (
         <InsightCard key={i.id} insight={i} />
       ))}
     </section>
   );
+  const memoryButton = (
+    <button
+      type="button"
+      className={`press flex h-10 shrink-0 items-center gap-1.5 border px-2.5 text-[11px] font-bold uppercase tracking-[0.08em] ${memoryOpen ? "border-ink bg-elevated text-ink" : "border-line text-ink-2 hover:text-ink"}`}
+      onClick={() => setMemoryOpen((o) => !o)}
+      aria-expanded={memoryOpen}
+      aria-controls="coach-memory"
+    >
+      <Icon.bookmark size={14} /> Memory <span className="num text-ink-3">{memory.facts.length}</span>
+    </button>
+  );
+  const memoryPanel = memoryOpen && <MemoryPanel memory={memory} onChange={saveMemory} onClose={() => setMemoryOpen(false)} />;
+  const chat = <Chat profile={profile} calc={calc} today={today} days={days} insights={insights} memory={memory} saveMemory={saveMemory} desktop={desktop} />;
 
   if (desktop) {
     return (
       <div className="stagger space-y-6">
         <div style={{ ["--i" as string]: 0 }}>
-          <Title />
+          <Title>{memoryButton}</Title>
         </div>
+        {memoryPanel}
         <div className="grid grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-start gap-6">
-          <Chat profile={profile} calc={calc} today={today} days={days} insights={insights} memory={memory} saveMemory={saveMemory} />
+          {chat}
           <div className="space-y-6">
             <div className="segmented" role="tablist" aria-label="Review type">
               {(["daily", "weekly"] as const).map((m) => (
@@ -117,26 +140,26 @@ function Coach({ profile, calc, today, days }: { profile: Profile; calc: TargetC
   }
 
   return (
-    <div className="stagger space-y-6">
-      <div style={{ ["--i" as string]: 0 }}>
-        <Title />
+    <div className="space-y-4">
+      <Title>{memoryButton}</Title>
+      {memoryPanel}
+      {/* Sticks under the top bar so you can switch while scrolled down a long chat. */}
+      <div className="sticky top-[calc(56px+env(safe-area-inset-top))] z-10 -mx-5 bg-bg/95 px-5 py-2 backdrop-blur-sm">
+        <div className="segmented" role="tablist" aria-label="Coach">
+          {(["chat", "daily", "weekly"] as const).map((m) => (
+            <button key={m} role="tab" aria-selected={tab === m} onClick={() => setTab(m)}>
+              {m === "chat" ? "Chat" : m === "daily" ? "Today" : "Week"}
+            </button>
+          ))}
+        </div>
       </div>
-
-      <div className="segmented" role="tablist" aria-label="Coach" style={{ ["--i" as string]: 1 }}>
-        {(["chat", "daily", "weekly"] as const).map((m) => (
-          <button key={m} role="tab" aria-selected={tab === m} onClick={() => setTab(m)}>
-            {m === "chat" ? "Ask" : m === "daily" ? "Today" : "Week"}
-          </button>
-        ))}
-      </div>
-
       {tab === "chat" ? (
-        <Chat profile={profile} calc={calc} today={today} days={days} insights={insights} memory={memory} saveMemory={saveMemory} />
+        chat
       ) : (
-        <>
+        <div className="stagger space-y-6">
           {review(mode)}
           {patterns}
-        </>
+        </div>
       )}
     </div>
   );
@@ -146,7 +169,43 @@ function Coach({ profile, calc, today, days }: { profile: Profile; calc: TargetC
 
 const stamp = () => Date.now();
 
-const STARTERS = ["What's left today?", "Plan my dinner", "High-protein snack ideas", "Why am I not losing weight?", "Ask me about how I eat"];
+const STARTERS: { text: string; hint: string }[] = [
+  { text: "What's left today?", hint: "Instant, no AI" },
+  { text: "Plan my dinner", hint: "Fits what's left" },
+  { text: "High-protein snack ideas", hint: "Close the gap" },
+  { text: "Why am I not losing weight?", hint: "From your trend" },
+];
+
+/** What the coach is working from right now, so its answers feel grounded. */
+function ContextStrip({ calc, today, days }: { calc: TargetCalc; today: string; days: DayLog[] }) {
+  const { water } = useApp();
+  const t = calc.targets;
+  const tot = sumItems(days.find((d) => d.date === today)?.items ?? []);
+  const kcalLeft = Math.round(t.calories - tot.calories);
+  const proteinLeft = Math.max(0, Math.round(t.protein_g - tot.protein_g));
+  const waterLeft = Math.max(0, waterTarget(calc.weightKg) - (water[today]?.ml ?? 0));
+  const chips = [
+    { label: kcalLeft >= 0 ? "kcal left" : "kcal over", value: fmtInt(Math.abs(kcalLeft)), color: kcalLeft >= 0 ? "var(--lime)" : "var(--over)" },
+    { label: "protein left", value: proteinLeft ? `${proteinLeft} g` : "done", color: "var(--protein)" },
+    { label: "water left", value: waterLeft ? fmtLitres(waterLeft) : "done", color: "var(--water)" },
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-2" aria-label="What the coach can see today">
+      {chips.map((c) => (
+        <div key={c.label} className="border border-line bg-surface px-2.5 py-2">
+          <p className="num truncate text-base font-extrabold leading-tight">{c.value}</p>
+          <p className="mt-0.5 flex items-center gap-1 truncate text-[10px] font-semibold uppercase tracking-[0.04em] text-ink-3">
+            <span className="h-1.5 w-1.5 shrink-0" style={{ background: c.color }} aria-hidden="true" />
+            {c.label}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const timeOf = (at: number) => new Date(at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+const dayOf = (at: number) => new Date(at).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
 
 function Chat({
   profile,
@@ -156,6 +215,7 @@ function Chat({
   insights,
   memory,
   saveMemory,
+  desktop,
 }: {
   profile: Profile;
   calc: TargetCalc;
@@ -164,26 +224,57 @@ function Chat({
   insights: Insight[];
   memory: Memory;
   saveMemory: (m: Memory) => Promise<void>;
+  desktop: boolean;
 }) {
   const { online, summaries, weights, tdee, dataVersion, name, water } = useApp();
   const [log, setLog] = useState<ChatLog>({ messages: [] });
+  const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let live = true;
-    db.getRecords<ChatLog>("chat").then((r) => live && setLog(r.main ?? { messages: [] }));
+    db.getRecords<ChatLog>("chat").then((r) => {
+      if (!live) return;
+      setLog(r.main ?? { messages: [] });
+      setLoaded(true);
+    });
     return () => {
       live = false;
     };
   }, [dataVersion]);
 
+  // Keep the newest message in view: inside the card on desktop, the page itself on phones.
+  const first = useRef(true);
   useEffect(() => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
-  }, [log.messages.length, busy]);
+    if (!loaded) return;
+    const behavior: ScrollBehavior = first.current ? "auto" : "smooth";
+    first.current = false;
+    if (desktop) scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior });
+    // The page's bottom padding and the spacer leave room for the pinned composer, so the very bottom is right.
+    else if (log.messages.length || busy) window.scrollTo({ top: document.documentElement.scrollHeight, behavior });
+  }, [loaded, log.messages.length, busy, desktop]);
+
+  // Phones: the composer is pinned above the tab bar; publish its height so the page leaves room for it.
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el || desktop) return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--composer-h", `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [desktop]);
+
+  // The box grows with what you type, up to a few lines.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  }, [text]);
 
   const persist = async (messages: StoredMessage[]) => {
     const next = { messages: trimChat(messages) };
@@ -229,151 +320,268 @@ function Chat({
     if (r.memory_add.length || r.memory_remove.length) await saveMemory(applyMemory(memory, r.memory_add, r.memory_remove));
   };
 
-  const last = log.messages.at(-1);
-  const suggestions = !log.messages.length ? STARTERS : last?.role === "assistant" ? (last.followUps ?? []) : [];
+  const messages = log.messages;
+  const last = messages.at(-1);
+  const suggestions = messages.length && last?.role === "assistant" ? (last.followUps ?? []) : [];
 
-  return (
-    <section className="plunk face-card flex flex-col" style={{ ["--d" as string]: "5px" }} aria-label="Chat with your coach">
-      <div className="flex items-center justify-between gap-2 border-b border-line-soft px-4 py-3">
-        <span className="plunk face-violet inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-[0.1em]" style={{ ["--d" as string]: "2px" }}>
-          <Icon.coach size={11} /> Ask your coach
-        </span>
-        {log.messages.length > 0 && (
-          <button className="text-[11px] font-bold uppercase tracking-[0.1em] text-ink-3 hover:text-ink" onClick={() => confirm("Clear this conversation? What the coach remembers about you stays.") && void persist([])}>
-            Clear chat
-          </button>
-        )}
-      </div>
-
-      <div ref={scroller} className="max-h-[58dvh] min-h-[260px] space-y-3 overflow-y-auto px-4 py-4 lg:h-[calc(100dvh-440px)] lg:max-h-none" aria-live="polite">
-        {log.messages.length === 0 && (
-          <div className="space-y-2">
-            <p className="font-bold">Hi{name ? ` ${name}` : ""}. Ask me anything about your eating.</p>
-            <p className="text-sm text-ink-2">
-              I can see your targets, today&apos;s log, recent days and weight trend. I remember your preferences as we talk
-              {memory.facts.length ? `: ${memory.facts.length} note${memory.facts.length === 1 ? "" : "s"} so far` : ""}, so answers get more personal over time.
+  const thread = (
+    <div className="space-y-3" aria-live="polite">
+      {messages.length === 0 ? (
+        <div className="space-y-4 py-1">
+          <div>
+            <p className="text-lg font-extrabold leading-snug">Hi{name ? ` ${name}` : ""}. What do you want to figure out?</p>
+            <p className="mt-1 text-sm text-ink-2">
+              I can see your targets, today&apos;s log, recent days and weight trend
+              {memory.facts.length ? `, and I remember ${memory.facts.length} thing${memory.facts.length === 1 ? "" : "s"} about you` : ""}.
             </p>
           </div>
-        )}
-        {log.messages.map((m, i) =>
-          m.role === "user" ? (
-            <div key={i} className="flex justify-end">
-              <p className="max-w-[85%] whitespace-pre-wrap bg-lime px-3 py-2 text-sm font-medium text-on-accent">{m.content}</p>
-            </div>
-          ) : (
-            <div key={i} className="max-w-[92%]">
-              <p className={`whitespace-pre-wrap border-l-4 bg-elevated px-3 py-2 text-[15px] leading-relaxed ${m.safety ? "border-l-warn" : "border-l-violet"}`}>{m.content}</p>
-              {m.local && <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">Answered on your device · no AI call</p>}
-            </div>
-          ),
-        )}
-        {busy && (
-          <div className="max-w-[60%] border-l-4 border-l-violet bg-elevated px-3 py-3">
-            <div className="pulse h-2 w-24 bg-ink-3/40" />
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-2 border-t border-line-soft p-3">
-        {suggestions.length > 0 && !busy && (
-          <div className="no-scrollbar flex gap-2 overflow-x-auto" role="group" aria-label="Suggestions">
-            {suggestions.map((sug) => (
-              <button key={sug} className="chip shrink-0 !min-h-8 !text-xs" onClick={() => void send(sug)}>
-                {sug}
+          <div className="grid grid-cols-2 gap-2">
+            {STARTERS.map((s, i) => (
+              <button
+                key={s.text}
+                type="button"
+                className="press rise-in flex min-h-[76px] flex-col justify-between border border-line bg-surface p-3 text-left hover:border-ink"
+                style={{ animationDelay: `${i * 50}ms` }}
+                onClick={() => void send(s.text)}
+              >
+                <span className="text-sm font-bold leading-snug">{s.text}</span>
+                <span className="mt-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">{s.hint}</span>
               </button>
             ))}
           </div>
-        )}
-        {error && (
-          <p className="flex items-start gap-1.5 text-xs text-warn" role="alert">
-            <Icon.alert size={13} /> {error}
-          </p>
-        )}
-        <form
-          className="flex items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void send(text);
-          }}
-        >
-          <label className="flex-1">
-            <span className="sr-only">Message your coach</span>
-            <textarea
-              ref={inputRef}
-              rows={1}
-              value={text}
-              maxLength={CHAT_MAX_CHARS}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(text);
-                }
-              }}
-              placeholder={online ? "Ask about meals, swaps, cravings…" : "Offline"}
-              className="block max-h-32 min-h-12 w-full resize-none border border-line bg-bg px-3 py-3 text-base text-ink placeholder:text-ink-3 focus:border-ink focus:shadow-[3px_3px_0_var(--lime)] focus:outline-none"
-            />
-          </label>
-          <button type="submit" className="pop-btn lime mb-1 w-12 !px-0" disabled={busy || !text.trim()} aria-label="Send">
-            <Icon.send />
-          </button>
-        </form>
-        <MemoryPanel memory={memory} onChange={saveMemory} />
+        </div>
+      ) : (
+        messages.map((m, i) => {
+          const prev = messages[i - 1];
+          const newDay = !prev || dayOf(prev.at) !== dayOf(m.at);
+          return (
+            <div key={`${m.at}-${i}`}>
+              {newDay && <p className="my-2 text-center text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">{dayOf(m.at)}</p>}
+              <Bubble message={m} />
+            </div>
+          );
+        })
+      )}
+      {busy && <Typing />}
+    </div>
+  );
+
+  const composer = (
+    <div className="space-y-2">
+      {suggestions.length > 0 && !busy && (
+        <div className="no-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1" role="group" aria-label="Suggestions">
+          {suggestions.map((sug) => (
+            <button key={sug} className="chip press shrink-0 !min-h-8 !text-xs" onClick={() => void send(sug)}>
+              {sug}
+            </button>
+          ))}
+        </div>
+      )}
+      {error && (
+        <p className="flex items-start gap-1.5 text-xs text-warn" role="alert">
+          <Icon.alert size={13} /> {error}
+        </p>
+      )}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send(text);
+        }}
+      >
+        <label className="flex-1">
+          <span className="sr-only">Message your coach</span>
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={text}
+            maxLength={CHAT_MAX_CHARS}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void send(text);
+              }
+            }}
+            placeholder={online ? "Ask your coach…" : "Offline"}
+            className="block min-h-12 w-full resize-none border border-line bg-surface px-3 py-3 text-base leading-snug text-ink placeholder:text-ink-3 focus:border-ink focus:shadow-[3px_3px_0_var(--lime)] focus:outline-none"
+          />
+        </label>
+        <button type="submit" className="pop-btn lime mb-1 w-12 !px-0" disabled={busy || !text.trim()} aria-label="Send">
+          <Icon.send />
+        </button>
+      </form>
+    </div>
+  );
+
+  const clear = messages.length > 0 && (
+    <button className="text-[11px] font-bold uppercase tracking-[0.1em] text-ink-3 hover:text-ink" onClick={() => confirm("Clear this conversation? What the coach remembers about you stays.") && void persist([])}>
+      Clear chat
+    </button>
+  );
+
+  if (desktop) {
+    return (
+      <section className="plunk face-card flex flex-col" style={{ ["--d" as string]: "5px" }} aria-label="Chat with your coach">
+        <div className="space-y-3 border-b border-line-soft p-4">
+          <div className="flex items-center justify-between gap-2">
+            <p className="label">Today, as the coach sees it</p>
+            {clear}
+          </div>
+          <ContextStrip calc={calc} today={today} days={days} />
+        </div>
+        <div ref={scroller} className="h-[calc(100dvh-500px)] min-h-[280px] overflow-y-auto px-4 py-4">
+          {thread}
+        </div>
+        <div className="border-t border-line-soft p-3">{composer}</div>
+      </section>
+    );
+  }
+
+  // Phones: the page is the conversation; the composer sits just above the tab bar.
+  return (
+    <section className="space-y-4" aria-label="Chat with your coach">
+      <ContextStrip calc={calc} today={today} days={days} />
+      {clear && <div className="-mb-2 flex justify-end">{clear}</div>}
+      {thread}
+      <div style={{ height: "var(--composer-h, 76px)" }} aria-hidden="true" />
+      <div ref={composerRef} className="fixed inset-x-0 bottom-[var(--dock-h)] z-20 mx-auto max-w-[430px] border-t border-line bg-bg/95 px-4 pb-2 pt-2.5 backdrop-blur-sm">
+        {composer}
       </div>
     </section>
   );
 }
 
-function MemoryPanel({ memory, onChange }: { memory: Memory; onChange: (m: Memory) => Promise<void> }) {
+/** One message. The coach's replies get light formatting: paragraphs, bullet and numbered lists, **bold**. */
+function Bubble({ message: m }: { message: StoredMessage }) {
+  if (m.role === "user") {
+    return (
+      <div className="rise-in flex flex-col items-end">
+        <p className="max-w-[85%] whitespace-pre-wrap bg-lime px-3.5 py-2.5 text-[15px] font-medium leading-snug text-on-accent shadow-[3px_3px_0_var(--shadow)]">{m.content}</p>
+        <p className="num mt-1 text-[10px] text-ink-3">{timeOf(m.at)}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="rise-in flex gap-2.5">
+      <span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-on-accent ${m.safety ? "bg-warn" : "bg-violet"}`} aria-hidden="true">
+        {m.safety ? <Icon.alert size={14} /> : <Icon.coach size={14} />}
+      </span>
+      <div className="min-w-0 max-w-[88%]">
+        <div className={`border border-line bg-surface px-3.5 py-2.5 text-[15px] leading-relaxed ${m.safety ? "border-l-4 border-l-warn" : ""}`}>
+          <RichText text={m.content} />
+        </div>
+        <p className="mt-1 text-[10px] text-ink-3">
+          <span className="num">{timeOf(m.at)}</span>
+          {m.local && <span className="font-semibold uppercase tracking-[0.08em]"> · on your device, no AI call</span>}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Typing() {
+  return (
+    <div className="rise-in flex gap-2.5" role="status" aria-label="Coach is typing">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center bg-violet text-on-accent" aria-hidden="true">
+        <Icon.coach size={14} />
+      </span>
+      <div className="flex items-center gap-1.5 border border-line bg-surface px-3.5 py-3.5" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className="typing-dot h-2 w-2 bg-ink-2" style={{ animationDelay: `${i * 150}ms` }} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** **bold** inside a line, as React nodes (never HTML). */
+function inline(line: string) {
+  return line.split(/(\*\*[^*]+\*\*)/g).map((part, i) => (part.startsWith("**") && part.endsWith("**") && part.length > 4 ? <strong key={i}>{part.slice(2, -2)}</strong> : part));
+}
+
+function RichText({ text }: { text: string }) {
+  const blocks: React.ReactNode[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  const flush = () => {
+    if (!list) return;
+    const Tag = list.ordered ? "ol" : "ul";
+    blocks.push(
+      <Tag key={blocks.length} className={`my-1.5 space-y-1 pl-5 ${list.ordered ? "list-decimal" : "list-[square]"} marker:text-violet`}>
+        {list.items.map((it, i) => (
+          <li key={i}>{inline(it)}</li>
+        ))}
+      </Tag>,
+    );
+    list = null;
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const bullet = line.match(/^[-*•]\s+(.*)$/);
+    const numbered = line.match(/^\d+[.)]\s+(.*)$/);
+    if (bullet || numbered) {
+      const ordered = !!numbered;
+      if (list && list.ordered !== ordered) flush();
+      list ??= { ordered, items: [] };
+      list.items.push((bullet ?? numbered)![1]);
+      continue;
+    }
+    flush();
+    if (line) blocks.push(<p key={blocks.length} className="[&:not(:first-child)]:mt-2">{inline(line)}</p>);
+  }
+  flush();
+  return <>{blocks}</>;
+}
+
+function MemoryPanel({ memory, onChange, onClose }: { memory: Memory; onChange: (m: Memory) => Promise<void>; onClose: () => void }) {
   const [adding, setAdding] = useState("");
   return (
-    <details className="group">
-      <summary className="flex cursor-pointer list-none items-center justify-between py-1 text-[11px] font-bold uppercase tracking-[0.1em] text-ink-2">
-        What the coach remembers ({memory.facts.length})
-        <span className="transition-transform group-open:rotate-180">
-          <Icon.chevron size={14} />
-        </span>
-      </summary>
-      <div className="space-y-2 pt-2">
-        <p className="text-xs text-ink-3">
-          Short notes the coach saves from your chats (preferences, dislikes, routine). They&apos;re sent with each question so answers fit you. Remove anything
-          that&apos;s wrong.
-        </p>
-        {memory.facts.length > 0 && (
-          <ul className="divide-y divide-line-soft border-y border-line-soft">
-            {memory.facts.map((f) => (
-              <li key={f.text} className="flex items-center gap-2 py-1.5 text-sm">
-                <span className="flex-1">{f.text}</span>
-                <button
-                  className="flex h-8 w-8 shrink-0 items-center justify-center text-ink-3 hover:text-over"
-                  aria-label={`Forget: ${f.text}`}
-                  onClick={() => void onChange(applyMemory(memory, [], [f.text]))}
-                >
-                  <Icon.trash size={14} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!adding.trim()) return;
-            void onChange(applyMemory(memory, [adding], []));
-            setAdding("");
-          }}
-        >
-          <label className="field compact flex-1">
-            <span>Tell it something to remember</span>
-            <input value={adding} maxLength={140} onChange={(e) => setAdding(e.target.value)} placeholder="e.g. No onion or garlic on Tuesdays" />
-          </label>
-          <button type="submit" className="pop-btn sm ghost shrink-0 self-center" disabled={!adding.trim()}>
-            Add
-          </button>
-        </form>
+    <section id="coach-memory" className="card rise-in space-y-3 p-4" aria-label="What the coach remembers">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="label">What the coach remembers</p>
+          <p className="mt-1 text-xs text-ink-2">Short notes it saves from your chats (preferences, dislikes, routine), sent with each question. Remove anything that&apos;s wrong.</p>
+        </div>
+        <button className="-mr-2 -mt-2 flex h-10 w-10 shrink-0 items-center justify-center text-ink-3 hover:text-ink" onClick={onClose} aria-label="Close memory">
+          <Icon.close size={16} />
+        </button>
       </div>
-    </details>
+      {memory.facts.length > 0 ? (
+        <ul className="flex flex-wrap gap-2">
+          {memory.facts.map((f) => (
+            <li key={f.text} className="flex items-center gap-1 border border-line bg-elevated py-1 pl-2.5 pr-1 text-sm">
+              {f.text}
+              <button
+                className="flex h-7 w-7 shrink-0 items-center justify-center text-ink-3 hover:text-over"
+                aria-label={`Forget: ${f.text}`}
+                onClick={() => void onChange(applyMemory(memory, [], [f.text]))}
+              >
+                <Icon.close size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-ink-3">Nothing yet. Tell it things like &quot;I&apos;m vegetarian&quot; or &quot;I train at 7 am&quot;.</p>
+      )}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!adding.trim()) return;
+          void onChange(applyMemory(memory, [adding], []));
+          setAdding("");
+        }}
+      >
+        <label className="field compact flex-1">
+          <span>Add a note</span>
+          <input value={adding} maxLength={140} onChange={(e) => setAdding(e.target.value)} placeholder="e.g. No onion or garlic on Tuesdays" />
+        </label>
+        <button type="submit" className="pop-btn sm ghost mb-1 shrink-0" disabled={!adding.trim()}>
+          Add
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -457,7 +665,7 @@ type State =
   | { kind: "done"; result: CoachResult; notice?: string; fresh: boolean; stale: boolean };
 
 function Review({ mode, profile, targets, today, days, insights, memory }: { mode: Mode; profile: Profile; targets: Targets; today: string; days: DayLog[]; insights: Insight[]; memory: string[] }) {
-  const { online } = useApp();
+  const { online, showToast } = useApp();
   const [state, setState] = useState<State>({ kind: "idle" });
   const [revealed, setRevealed] = useState(false);
   const memoryKey = memory.join("\n");
@@ -479,7 +687,14 @@ function Review({ mode, profile, targets, today, days, insights, memory }: { mod
     };
   }, [today, mode, hash]);
 
-  const run = async () => {
+  // Never leave the card stuck on "Crunching…": anything unexpected puts it back with a message.
+  const run = () =>
+    build().catch(() => {
+      setState({ kind: "idle" });
+      showToast("Couldn't put the review together. Try again.");
+    });
+
+  const build = async () => {
     setState({ kind: "loading" });
     setRevealed(false);
     const local = (): CoachResult => ({ ...localCoach(mode, { today, days, targets, profile }), engine: "local", generatedAt: Date.now() });

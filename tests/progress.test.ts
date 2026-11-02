@@ -73,6 +73,13 @@ describe("insights", () => {
     expect(c.snapshot).toMatch(/4 days logged/);
   });
 
+  it("handles a daily review when today is an empty day", () => {
+    // getDays returns { date, items: [] } for days with nothing logged.
+    const c = localCoach("daily", { ...input, days: [...days, { date: "2026-09-23", items: [] }] });
+    expect(c.snapshot).toBe("Nothing logged today yet.");
+    expect(c.went_well).toMatch(/Nothing logged yet today/);
+  });
+
   it("switches to the safety response on sensitive health notes", () => {
     const profile = { age: 30, sex: "female" as const, heightCm: 160, weightKg: 60, activity: "light" as const, goal: "lose" as const, rateKgPerWeek: 0.5, diet: "", healthNotes: "pregnant, 20 weeks" };
     const c = localCoach("daily", { ...input, profile });
