@@ -215,6 +215,7 @@ describe("coach memory and chat", () => {
     expect(localAnswer("plan my dinner", { calc, todayItems: [] })).toBeNull();
     expect(localAnswer("whats left", { calc, todayItems: [], waterMl: 1000 })).toMatch(/Water: .* L to go\./);
     expect(localAnswer("whats left", { calc, todayItems: [], waterMl: 5000 })).toMatch(/Water: done\./);
+    expect(localAnswer("whats left", { calc, todayItems: [], waterMl: 3000, waterGoalMl: 3500 })).toMatch(/Water: 0\.5 L to go\./);
   });
 
   it("builds a compact digest of the logs", () => {

@@ -139,13 +139,13 @@ export function buildDigest(i: DigestInput): string {
 }
 
 /** Answers that need no AI call. Returns null when the question needs the coach. */
-export function localAnswer(text: string, input: { calc: TargetCalc; todayItems: DayLog["items"]; waterMl?: number }): string | null {
+export function localAnswer(text: string, input: { calc: TargetCalc; todayItems: DayLog["items"]; waterMl?: number; waterGoalMl?: number }): string | null {
   const q = norm(text);
   if (!/^(whats|what is|how much)?\s*(left|remaining)( today| for today)?$/.test(q)) return null;
   const t = input.calc.targets;
   const tot = sumItems(input.todayItems);
   const left = remaining(t, tot);
-  const waterLeft = waterTarget(input.calc.weightKg) - (input.waterMl ?? 0);
+  const waterLeft = (input.waterGoalMl ?? waterTarget(input.calc.weightKg)) - (input.waterMl ?? 0);
   const water = waterLeft > 0 ? ` Water: ${fmtLitres(waterLeft)} to go.` : " Water: done.";
   if (!input.todayItems.length) return `Nothing logged yet today. Your targets: ${fmt(t.calories)} kcal and ${t.protein_g} g protein.${water}`;
   const parts = [

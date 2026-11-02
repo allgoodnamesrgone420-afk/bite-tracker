@@ -11,7 +11,7 @@ import { lastNDates } from "@/lib/progress";
 import { CHAT_MAX_CHARS, type CoachRequest, type CoachResult, type DayLog, type Profile } from "@/lib/schemas";
 import type { TargetCalc, Targets } from "@/lib/targets";
 import { sumItems } from "@/lib/totals";
-import { fmtLitres, waterTarget } from "@/lib/water";
+import { fmtLitres, waterGoal } from "@/lib/water";
 
 type Mode = "daily" | "weekly";
 type Tab = "chat" | Mode;
@@ -178,12 +178,12 @@ const STARTERS: { text: string; hint: string }[] = [
 
 /** What the coach is working from right now, so its answers feel grounded. */
 function ContextStrip({ calc, today, days }: { calc: TargetCalc; today: string; days: DayLog[] }) {
-  const { water } = useApp();
+  const { water, profile } = useApp();
   const t = calc.targets;
   const tot = sumItems(days.find((d) => d.date === today)?.items ?? []);
   const kcalLeft = Math.round(t.calories - tot.calories);
   const proteinLeft = Math.max(0, Math.round(t.protein_g - tot.protein_g));
-  const waterLeft = Math.max(0, waterTarget(calc.weightKg) - (water[today]?.ml ?? 0));
+  const waterLeft = Math.max(0, waterGoal(profile, calc.weightKg) - (water[today]?.ml ?? 0));
   const chips = [
     { label: kcalLeft >= 0 ? "kcal left" : "kcal over", value: fmtInt(Math.abs(kcalLeft)), color: kcalLeft >= 0 ? "var(--lime)" : "var(--over)" },
     { label: "protein left", value: proteinLeft ? `${proteinLeft} g` : "done", color: "var(--protein)" },
@@ -291,7 +291,7 @@ function Chat({
     const todayItems = days.find((d) => d.date === today)?.items ?? [];
 
     // Simple number questions are answered on the device: free and instant.
-    const local = localAnswer(t, { calc, todayItems, waterMl: water[today]?.ml });
+    const local = localAnswer(t, { calc, todayItems, waterMl: water[today]?.ml, waterGoalMl: waterGoal(profile, calc.weightKg) });
     if (local) {
       setText("");
       await persist([...log.messages, { ...userMsg, local: true }, { role: "assistant", content: local, at: now, local: true, followUps: ["Plan my next meal", "High-protein snack ideas"] }]);

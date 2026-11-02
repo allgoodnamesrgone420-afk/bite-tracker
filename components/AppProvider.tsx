@@ -13,7 +13,7 @@ import { supabase, syncConfigured } from "@/lib/supabase";
 import { syncNow } from "@/lib/sync";
 import { computeTargets, type Adapt, type TargetCalc } from "@/lib/targets";
 import { logDayKey, mealForTime, sumItems } from "@/lib/totals";
-import { addWater, type WaterLog } from "@/lib/water";
+import { addWater, setWaterTotal, type WaterLog, type WaterPrefs } from "@/lib/water";
 import { currentWeight, estimateTdee, type TdeeEstimate, type Weights } from "@/lib/weight";
 
 export type DraftItem = ParsedItem & {
@@ -110,6 +110,10 @@ type AppState = {
   deleteWeight: (date: string) => Promise<void>;
   /** Add (or with a negative amount, remove) water for a day. */
   logWater: (date: string, deltaMl: number) => Promise<void>;
+  /** Set a day's water total outright. */
+  setWater: (date: string, ml: number) => Promise<void>;
+  /** Save the water goal / tap size on your profile (needs a profile). */
+  saveWaterPrefs: (prefs: WaterPrefs) => Promise<boolean>;
   saveMeal: (name: string, items: ParsedItem[], then?: Sheet) => Promise<void>;
   deleteMeal: (id: string) => Promise<void>;
   logSavedMeal: (id: string) => void;
@@ -207,7 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<Account>({ configured: syncConfigured, ready: !syncConfigured, user: null, recovering: false });
   const [sync, setSync] = useState<SyncState>({ status: "off", lastSyncedAt: null });
   const [weights, setWeights] = useState<Weights>({});
-  const [water, setWater] = useState<WaterLog>({});
+  const [water, setWaterLog] = useState<WaterLog>({});
   const [meals, setMeals] = useState<Record<string, SavedMeal>>({});
   const [recipes, setRecipes] = useState<Record<string, Recipe>>({});
   const [localName, setLocalName] = useState("");
@@ -255,7 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSummaries(snap.summaries);
     setMyFoods(snap.myFoods);
     setWeights(snap.weights);
-    setWater(snap.water);
+    setWaterLog(snap.water);
     setMeals(snap.meals);
     setRecipes(snap.recipes);
     setLocalName(snap.localName);
@@ -682,13 +686,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Taps are queued: each one reads the store after the last one saved, so quick taps all count.
   const waterQueue = useRef<Promise<void>>(Promise.resolve());
-  const logWater = useCallback((date: string, deltaMl: number) => {
+  const changeWater = useCallback((change: (log: WaterLog) => WaterLog) => {
     waterQueue.current = waterQueue.current.then(async () => {
-      const next = addWater(await db.getRecords<WaterLog[string]>("water"), date, deltaMl);
+      const next = change(await db.getRecords<WaterLog[string]>("water"));
       await db.saveRecords("water", next);
-      setWater(next);
+      setWaterLog(next);
     }).catch(() => {}); // one failed write mustn't stall the taps after it
     return waterQueue.current;
+  }, []);
+  const logWater = useCallback((date: string, deltaMl: number) => changeWater((log) => addWater(log, date, deltaMl)), [changeWater]);
+  const setWater = useCallback((date: string, ml: number) => changeWater((log) => setWaterTotal(log, date, ml)), [changeWater]);
+
+  const saveWaterPrefs = useCallback(async (prefs: WaterPrefs) => {
+    const cur = await db.getProfile();
+    if (!cur) return false;
+    const next = { ...cur, ...prefs };
+    // An undefined value means "back to the default", so drop the key rather than store it.
+    for (const k of Object.keys(prefs) as (keyof WaterPrefs)[]) if (prefs[k] === undefined) delete next[k];
+    await db.saveProfile(next);
+    setProfile(next);
+    return true;
   }, []);
 
   /* --------------------------- meals & recipes --------------------------- */
@@ -866,6 +883,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     deleteWeight,
     water,
     logWater,
+    setWater,
+    saveWaterPrefs,
     saveMeal,
     deleteMeal,
     logSavedMeal,

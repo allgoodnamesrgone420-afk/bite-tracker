@@ -11,7 +11,8 @@ import { getThemePref, setThemePref, type ThemePref } from "@/lib/theme";
 import { ProfileSchema, type Profile, type TargetOverrides } from "@/lib/schemas";
 import { computeTargets } from "@/lib/targets";
 
-type Draft = Record<Exclude<keyof Profile, "adaptive">, string>;
+// Water settings are edited on the water card, not here.
+type Draft = Record<Exclude<keyof Profile, "adaptive" | "waterGoalMl" | "waterServingMl">, string>;
 const OVERRIDE_KEYS = ["calories", "protein_g", "carbs_g", "fat_g", "fibre_g"] as const;
 const OVERRIDE_LABEL = { calories: "Calories", protein_g: "Protein g", carbs_g: "Carbs g", fat_g: "Fat g", fibre_g: "Fibre g" };
 
@@ -86,7 +87,8 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
           e.preventDefault();
           setShowErrors(true);
           if (!parsed.success) return;
-          await saveSettings(parsed.data, overrideValues);
+          // Keep profile fields this form doesn't edit (water goal and tap size).
+          await saveSettings({ ...profile, ...parsed.data }, overrideValues);
           setSaved(true);
         }}
       >
