@@ -7,7 +7,7 @@ import { Icon, PopButton, fmtInt } from "@/components/ui";
 import * as db from "@/lib/db";
 import { STATUS_META, type DayStatus } from "@/lib/progress";
 import { buildWeekReport, defaultReportWeek, reportText, weekDates, type WeekReport } from "@/lib/report";
-import { fmtLitres, waterTarget } from "@/lib/water";
+import { fmtLitres, waterGoal } from "@/lib/water";
 import type { DayLog } from "@/lib/schemas";
 import { addDays, weekStart } from "@/lib/totals";
 
@@ -51,8 +51,8 @@ export default function WeekPage() {
 
 /** Seven little glasses, one per day, filled to how much you drank. */
 function WeekWater({ start }: { start: string }) {
-  const { water, calc, today } = useApp();
-  const target = waterTarget(calc?.weightKg);
+  const { water, calc, today, profile } = useApp();
+  const target = waterGoal(profile, calc?.weightKg);
   const dates = weekDates(start);
   const logged = dates.filter((d) => water[d]?.ml);
   if (!logged.length) return null;

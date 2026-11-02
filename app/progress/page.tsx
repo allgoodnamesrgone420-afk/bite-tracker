@@ -13,7 +13,7 @@ import { STATUS_META, classifyDay, lastNDates, monthGrid, rangeStats, targetStre
 import { MEALS, type DayLog, type Profile } from "@/lib/schemas";
 import type { Targets } from "@/lib/targets";
 import { addDays, sumItems } from "@/lib/totals";
-import { fmtLitres, waterTarget } from "@/lib/water";
+import { fmtLitres, servingOf, waterGoal } from "@/lib/water";
 import { currentWeight, trendSeries, weeklyRate } from "@/lib/weight";
 
 /** Chart fills: theme tokens validated for CVD separation (see globals.css). */
@@ -754,20 +754,40 @@ function DayDetail({ date, row, fallback, today }: { date: string; row?: DayRow;
   );
 }
 
+/** That day's water, with − / + so a past day can be filled in too (one tap = your tap size). */
 function DayWater({ date }: { date: string }) {
-  const { water, calc } = useApp();
+  const { water, calc, profile, logWater } = useApp();
   const ml = water[date]?.ml ?? 0;
-  if (!ml) return null;
-  const target = waterTarget(calc?.weightKg);
+  const target = waterGoal(profile, calc?.weightKg);
+  const serving = servingOf(profile);
   return (
-    <div className="mt-4 grid grid-cols-[52px_1fr_auto] items-center gap-2 border-t border-line pt-3">
-      <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-2">Water</span>
-      <div className="h-2 bg-elevated">
-        <div className="h-full bg-water" style={{ width: `${Math.min(100, (ml / target) * 100)}%` }} />
+    <div className="mt-4 flex items-center gap-2 border-t border-line pt-3">
+      <span className="w-[52px] shrink-0 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-2">Water</span>
+      <div className="h-2 min-w-0 flex-1 bg-elevated">
+        <div className="bar-anim h-full bg-water" style={{ width: `${Math.min(100, (ml / target) * 100)}%` }} />
       </div>
-      <span className="num text-right text-xs">
+      <span className="num shrink-0 text-right text-xs">
         {fmtLitres(ml)}
         <span className="text-ink-3"> / {fmtLitres(target)}</span>
+      </span>
+      <span className="flex shrink-0">
+        <button
+          type="button"
+          className="press flex h-9 w-9 items-center justify-center border border-line font-bold text-ink-2 hover:text-ink disabled:opacity-30"
+          onClick={() => void logWater(date, -Math.min(serving, ml))}
+          disabled={ml === 0}
+          aria-label={`Remove ${serving} ml of water from this day`}
+        >
+          −
+        </button>
+        <button
+          type="button"
+          className="press -ml-px flex h-9 w-9 items-center justify-center border border-line font-bold text-water hover:text-ink"
+          onClick={() => void logWater(date, serving)}
+          aria-label={`Add ${serving} ml of water to this day`}
+        >
+          +
+        </button>
       </span>
     </div>
   );

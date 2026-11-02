@@ -31,6 +31,10 @@ export const ProfileSchema = z.object({
   healthNotes: z.string().max(300).default(""),
   /** Use maintenance estimated from your own logs + weigh-ins once there's enough data (default on). */
   adaptive: z.boolean().optional(),
+  /** Water: a daily goal you chose (ml), instead of the one from your weight. */
+  waterGoalMl: z.number().int().min(500).max(8000).optional(),
+  /** Water: how much one tap adds (ml). */
+  waterServingMl: z.number().int().min(50).max(2000).optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 
