@@ -310,7 +310,8 @@ export function localCoach(mode: "daily" | "weekly", input: InsightInput): Coach
     };
   }
   const insights = computeInsights(input);
-  const todayLog = days.find((d) => d.date === today);
+  // An empty day comes back as { items: [] }; treat it as "nothing logged" (an empty list has no best food).
+  const todayLog = days.find((d) => d.date === today && d.items.length > 0);
   const tot = sumItems(todayLog?.items ?? []);
   const warns = insights.filter((i) => i.tone === "warn" || i.id === "fibre" || i.id === "snacks");
   const changes = warns.slice(0, mode === "daily" ? 3 : 2).map((i) => ({
