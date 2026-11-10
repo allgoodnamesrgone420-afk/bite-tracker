@@ -52,7 +52,7 @@ export const LIMITS = {
 } as const;
 export type Route = keyof typeof LIMITS;
 
-type Bucket = { tokens: number; updated: number };
+type Bucket = { tokens: number; updated: number; day: string; dayCount: number };
 const buckets = new Map<string, Bucket>();
 
 export function clientIp(req: Request): string {
@@ -61,19 +61,34 @@ export function clientIp(req: Request): string {
   return req.headers.get("x-real-ip") ?? "local";
 }
 
-export function rateLimit(key: string, perMinute: number): boolean {
+/**
+ * Token bucket per key, plus a daily cap when `perDay` is given. Without the
+ * daily cap, local-only mode (and the fallback when the database limiter is
+ * unreachable) let one caller make ~29,000 paid AI calls a day.
+ */
+export function rateLimit(key: string, perMinute: number, perDay?: number): "ok" | "minute" | "day" {
   const now = Date.now();
-  const b = buckets.get(key) ?? { tokens: perMinute, updated: now };
+  const today = new Date(now).toISOString().slice(0, 10);
+  if (!buckets.has(key) && buckets.size >= 5_000) evictOldest();
+  const b = buckets.get(key) ?? { tokens: perMinute, updated: now, day: today, dayCount: 0 };
   b.tokens = Math.min(perMinute, b.tokens + ((now - b.updated) / 60_000) * perMinute);
   b.updated = now;
-  if (buckets.size > 5_000) buckets.clear(); // crude memory guard
-  if (b.tokens < 1) {
-    buckets.set(key, b);
-    return false;
+  if (b.day !== today) {
+    b.day = today;
+    b.dayCount = 0;
   }
-  b.tokens -= 1;
   buckets.set(key, b);
-  return true;
+  if (perDay !== undefined && b.dayCount >= perDay) return "day";
+  if (b.tokens < 1) return "minute";
+  b.tokens -= 1;
+  b.dayCount += 1;
+  return "ok";
+}
+
+/** Memory guard: drop the least recently used half instead of everyone's counters at once. */
+function evictOldest() {
+  const byAge = [...buckets.entries()].sort((a, b) => a[1].updated - b[1].updated);
+  for (const [k] of byAge.slice(0, Math.ceil(byAge.length / 2))) buckets.delete(k);
 }
 
 /* ------------------------- body reading ---------------------------- */
@@ -140,7 +155,7 @@ async function takeToken(token: string, who: string, route: Route): Promise<"ok"
     console.error(`[guard] take_token unavailable (${error?.message ?? String(data)}); using in-memory limits`);
     warnedFallback = true;
   }
-  return rateLimit(`${route}:${who}`, perMinute) ? "ok" : "minute";
+  return rateLimit(`${route}:${who}`, perMinute, perDay);
 }
 
 /** Common preamble for every AI route. Returns an error Response, or null to continue. */
@@ -154,8 +169,8 @@ export async function guard(req: Request, route: Route): Promise<Response | null
     return null;
   }
   if (!checkPasscode(req)) return errorResponse("unauthorized", "Passcode required.");
-  if (!rateLimit(`${route}:${clientIp(req)}`, LIMITS[route].perMinute)) {
-    return errorResponse("rate_limited", "Too many requests. Give it a few seconds.");
-  }
+  const t = rateLimit(`${route}:${clientIp(req)}`, LIMITS[route].perMinute, LIMITS[route].perDay);
+  if (t === "day") return errorResponse("rate_limited", "You've hit today's limit for this AI feature. It resets at 05:30 IST (midnight UTC).");
+  if (t === "minute") return errorResponse("rate_limited", "Too many requests. Give it a few seconds.");
   return null;
 }
