@@ -11,10 +11,10 @@ import { localParse, type LocalParse } from "@/lib/local-parser";
 import { LogItemSchema, ParsedItemSchema, type ApiErrorCode, type DayLog, type LogItem, type Meal, type ParsedItem, type ParseRequest, type Profile, type TargetOverrides } from "@/lib/schemas";
 import { supabase, syncConfigured } from "@/lib/supabase";
 import { syncNow } from "@/lib/sync";
-import { computeTargets, type Adapt, type TargetCalc } from "@/lib/targets";
+import type { Adapt, TargetCalc } from "@/lib/targets";
 import { logDayKey, mealForTime, sumItems } from "@/lib/totals";
 import { addWater, setWaterTotal, type WaterLog, type WaterPrefs } from "@/lib/water";
-import { currentWeight, estimateTdee, type TdeeEstimate, type Weights } from "@/lib/weight";
+import { resolveTargets, type TdeeEstimate, type Weights } from "@/lib/weight";
 
 export type DraftItem = ParsedItem & {
   key: string;
@@ -225,20 +225,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Targets: formula first, then refined by your trend weight and (when there's
   // enough data and adaptive is on) the maintenance your logs + weigh-ins imply.
-  const { calc, adapt, tdee } = useMemo(() => {
-    if (!profile) return { calc: null, adapt: {}, tdee: null };
-    const w = currentWeight(weights, today);
-    const base: Adapt = w ? { weightKg: w.trend } : {};
-    const formula = computeTargets(profile, overrides, base);
-    const est = estimateTdee({ rows: summaries, weights, today, fallback: formula.targets, formulaTdee: formula.formulaTdee });
-    if (profile.adaptive === false || !est.ok) return { calc: formula, adapt: base, tdee: est };
-    const adapt: Adapt = {
-      ...base,
-      tdee: est.tdee,
-      tdeeNote: `${est.days} logged days, ${est.weighIns} weigh-ins (${est.confidence} confidence); formula says ${formula.formulaTdee.toLocaleString("en-IN")}`,
-    };
-    return { calc: computeTargets(profile, overrides, adapt), adapt, tdee: est };
-  }, [profile, overrides, weights, summaries, today]);
+  const { calc, adapt, tdee } = useMemo(
+    () => (profile ? resolveTargets({ profile, overrides, weights, rows: summaries, today }) : { calc: null, adapt: {}, tdee: null }),
+    [profile, overrides, weights, summaries, today],
+  );
+
+  // The hosted MCP server runs in UTC, so it needs to know where your day starts: keep
+  // the profile's time zone in step with the device you used last.
+  useEffect(() => {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!profile || !timeZone || profile.timeZone === timeZone) return;
+    const next = { ...profile, timeZone };
+    void db.saveProfile(next).then(() => setProfile(next));
+  }, [profile]);
 
   // Refs let async callbacks read the latest state without re-creating themselves.
   const dayRef = useRef(day);

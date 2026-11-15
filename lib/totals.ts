@@ -97,6 +97,29 @@ export function streak(loggedDates: Iterable<string>, today: string): number {
   return n;
 }
 
+/** Whether the runtime knows this IANA time zone name. */
+export function validTimeZone(timeZone: string | undefined): timeZone is string {
+  if (!timeZone) return false;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The wall clock in a time zone, as a Date whose local fields (date, hours)
+ * read as that zone's. For code that runs on a server in another zone, so
+ * `logDayKey` and `mealForTime` see the person's day, not the server's.
+ * Use it for "what day and time is it for them", never as a timestamp.
+ */
+export function wallClock(at: Date, timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(at);
+  const p = Object.fromEntries(parts.map((x) => [x.type, Number(x.value)]));
+  return new Date(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+}
+
 export function mealForTime(d: Date = new Date()): Meal {
   const mins = d.getHours() * 60 + d.getMinutes();
   if (mins >= 5 * 60 && mins < 11 * 60) return "breakfast";
