@@ -12,7 +12,7 @@ import { ProfileSchema, type Profile, type TargetOverrides } from "@/lib/schemas
 import { computeTargets } from "@/lib/targets";
 
 // Water settings are edited on the water card, not here.
-type Draft = Record<Exclude<keyof Profile, "adaptive" | "waterGoalMl" | "waterServingMl">, string>;
+type Draft = Record<Exclude<keyof Profile, "adaptive" | "waterGoalMl" | "waterServingMl" | "timeZone">, string>;
 const OVERRIDE_KEYS = ["calories", "protein_g", "carbs_g", "fat_g", "fibre_g"] as const;
 const OVERRIDE_LABEL = { calories: "Calories", protein_g: "Protein g", carbs_g: "Carbs g", fat_g: "Fat g", fibre_g: "Fibre g" };
 
@@ -259,6 +259,7 @@ function SettingsForm({ profile, overrides }: { profile: Profile | null; overrid
         <Icon.right size={16} />
       </Link>
       <AISection />
+      {syncConfigured && <AssistantsSection />}
       {!syncConfigured && <PasscodeSection />}
       <BackupSection onImported={reloadAll} />
       </div>
@@ -437,6 +438,74 @@ const THINKING: { value: Effort; label: string }[] = [
   { value: "medium", label: "Medium" },
   { value: "high", label: "High (slowest)" },
 ];
+
+type Grant = { id: string; name: string; since: string };
+
+/** Assistants connected over MCP (ChatGPT, Claude, Gemini…): the address to give them, and who has access. */
+function AssistantsSection() {
+  const { showToast } = useApp();
+  const [grants, setGrants] = useState<Grant[] | null>(null);
+  const url = typeof window === "undefined" ? "" : `${window.location.origin}/api/mcp`;
+
+  useEffect(() => {
+    let live = true;
+    // Fails when the project's OAuth server is off; that just means nothing can be connected yet.
+    supabase()
+      ?.auth.oauth.listGrants()
+      .then(({ data }) => live && setGrants((data ?? []).map((g) => ({ id: g.client.id, name: g.client.name || "Unnamed app", since: g.granted_at }))));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  return (
+    <section className="card space-y-3 p-4">
+      <div>
+        <p className="label">Connected assistants</p>
+        <p className="mt-1 text-xs text-ink-2">Let ChatGPT, Claude, Gemini or another assistant read and add to your log. Give it this address as a custom connector (MCP server); you&apos;ll be asked to sign in and approve.</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <code className="num min-w-0 flex-1 truncate border border-line bg-bg px-2.5 py-2 text-xs">{url}</code>
+        <button
+          type="button"
+          className="pop-btn sm ghost shrink-0"
+          onClick={() => void navigator.clipboard.writeText(url).then(() => showToast("Address copied"), () => showToast("Couldn't copy. Select the address and copy it."))}
+        >
+          Copy
+        </button>
+      </div>
+      {grants === null ? (
+        <p className="pulse text-xs text-ink-3">Checking…</p>
+      ) : grants.length === 0 ? (
+        <p className="text-xs text-ink-3">Nothing connected yet.</p>
+      ) : (
+        <ul className="divide-y divide-line-soft border-y border-line-soft">
+          {grants.map((g) => (
+            <li key={g.id} className="flex items-center justify-between gap-2 py-2">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-bold">{g.name}</span>
+                <span className="block text-[11px] text-ink-3">since {new Date(g.since).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+              </span>
+              <button
+                type="button"
+                className="text-[11px] font-bold uppercase tracking-[0.08em] text-over"
+                onClick={async () => {
+                  if (!confirm(`Remove ${g.name}'s access to your Bite account?`)) return;
+                  const res = await supabase()?.auth.oauth.revokeGrant({ clientId: g.id });
+                  if (res?.error) return showToast("Couldn't remove it. Try again.");
+                  setGrants((cur) => (cur ?? []).filter((x) => x.id !== g.id));
+                  showToast(`${g.name} can no longer use your account`);
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 function AISection() {
   const [status, setStatus] = useState<AIStatus | null | undefined>(undefined);

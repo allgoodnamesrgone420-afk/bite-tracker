@@ -140,7 +140,7 @@ begin
   if p_per_minute < 1 or p_per_day < 1 then return 'denied'; end if;
   -- Signed-in users can call this directly, so only known routes get a row
   -- (otherwise made-up route names could fill the table).
-  if p_route not in ('parse', 'vision', 'coach', 'chat', 'barcode', 'status') then return 'denied'; end if;
+  if p_route not in ('parse', 'vision', 'coach', 'chat', 'barcode', 'status', 'mcp') then return 'denied'; end if;
 
   insert into public.rate_limits as rl (user_id, route, tokens, refilled_at, day, day_count)
   values (uid, p_route, p_per_minute, now_ts, today, 0)

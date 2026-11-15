@@ -35,6 +35,8 @@ export const ProfileSchema = z.object({
   waterGoalMl: z.number().int().min(500).max(8000).optional(),
   /** Water: how much one tap adds (ml). */
   waterServingMl: z.number().int().min(50).max(2000).optional(),
+  /** Your device's time zone (IANA name), saved by the app so the hosted MCP server knows when your day starts. */
+  timeZone: z.string().max(64).optional(),
 });
 export type Profile = z.infer<typeof ProfileSchema>;
 

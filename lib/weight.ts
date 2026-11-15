@@ -4,7 +4,8 @@
  * lost, from the weight trend) is what you actually burn. Pure and unit-tested.
  */
 import { classifyDay, type DayRow } from "./progress";
-import { KCAL_PER_KG, type Targets } from "./targets";
+import type { Profile, TargetOverrides } from "./schemas";
+import { KCAL_PER_KG, computeTargets, type Adapt, type TargetCalc, type Targets } from "./targets";
 import { addDays } from "./totals";
 
 export type WeighIn = { kg: number; at: number };
@@ -142,4 +143,28 @@ export function estimateTdee(input: { rows: Record<string, DayRow>; weights: Wei
     confidence,
     clamped: raw !== fromData,
   };
+}
+
+/**
+ * Your targets as the app shows them: the formula first, refined by your trend
+ * weight, then (when there's enough data and adaptive is on) by the
+ * maintenance your logs and weigh-ins imply. Shared by the app and the MCP server.
+ */
+export function resolveTargets(input: { profile: Profile; overrides: TargetOverrides; weights: Weights; rows: Record<string, DayRow>; today: string }): {
+  calc: TargetCalc;
+  adapt: Adapt;
+  tdee: TdeeEstimate;
+} {
+  const { profile, overrides, weights, rows, today } = input;
+  const w = currentWeight(weights, today);
+  const base: Adapt = w ? { weightKg: w.trend } : {};
+  const formula = computeTargets(profile, overrides, base);
+  const est = estimateTdee({ rows, weights, today, fallback: formula.targets, formulaTdee: formula.formulaTdee });
+  if (profile.adaptive === false || !est.ok) return { calc: formula, adapt: base, tdee: est };
+  const adapt: Adapt = {
+    ...base,
+    tdee: est.tdee,
+    tdeeNote: `${est.days} logged days, ${est.weighIns} weigh-ins (${est.confidence} confidence); formula says ${formula.formulaTdee.toLocaleString("en-IN")}`,
+  };
+  return { calc: computeTargets(profile, overrides, adapt), adapt, tdee: est };
 }

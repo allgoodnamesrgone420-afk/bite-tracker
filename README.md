@@ -72,6 +72,72 @@ With Supabase connected, Bite has accounts and syncs across devices:
 3. In Supabase → **Authentication → URL Configuration**, set **Site URL** to your production URL, and add `https://<your-domain>/**` and `http://localhost:3000/**` to **Redirect URLs** (for confirmation and password-reset links). In **Authentication → Providers → Email** (or *Sign In / Providers*), set the minimum password length to 8 to match the app.
 4. Redeploy, open the site, choose **New account** with the owner email, confirm it from your inbox, and sign in.
 
+## MCP server
+
+Bite speaks the [Model Context Protocol](https://modelcontextprotocol.io), so an assistant can read your log and add to it: "what's left today?", "log 2 rotis and dal for lunch", "I drank a bottle of water", "how was my week?". There are two ways in, with the same tools:
+
+- **Hosted**, at `https://<your-site>/api/mcp`: for assistants that connect to a URL (ChatGPT, Claude, Gemini CLI, Cursor and others). You sign in and approve access in the browser.
+- **Local**, `mcp/server.ts`: for tools that launch programs on your computer (Claude Code, Claude Desktop).
+
+Both need [accounts & sync](#accounts--sync); neither can see a device's local-only data. They use the same synced tables as the app, and row-level security limits every request to the signed-in person's own rows. Anything logged shows up in the app on its next sync (about a minute, or when you reopen it). The server makes no AI calls: text goes through the built-in food library and your saved foods, and the assistant supplies numbers for anything else.
+
+| Tool | What it does |
+|---|---|
+| `get_day` | A day's food by meal, totals, targets, what's left, micronutrients and water |
+| `get_progress` | Last N days against target, streaks, averages, weight trend, water |
+| `get_targets` | Calorie, macro and water targets, how they were calculated, and your profile |
+| `search_foods` | Nutrition per unit from your saved foods and the food library |
+| `log_food` | Log from plain text, or from items with numbers; today or a past day |
+| `delete_food` | Remove one logged item by id |
+| `log_water` | Add or take back water, or set a day's total |
+| `log_weight` | Record a weigh-in |
+
+### Hosted: any assistant
+
+Sign-in uses Supabase Auth as an OAuth 2.1 server (beta, all plans). The assistant gets a normal Supabase user token for whoever approved it, so it has that person's access to their own Bite data, no more.
+
+One-time setup by the owner:
+
+1. Deploy this version, then re-run `npm run db:setup -- you@example.com`. It adds the `mcp` rate limit (60 a minute, 3,000 a day per person); until then a per-server limiter is used.
+2. In Supabase → **Authentication → OAuth Server**: enable it and set the **Authorization Path** to `/oauth/consent`. Allow **dynamic client registration** so assistants can register themselves; otherwise add each one by hand under **Authentication → OAuth Apps** with the redirect URL it gives you.
+3. Check **Authentication → URL Configuration → Site URL** is your production URL: the approval page is the Site URL plus `/oauth/consent`.
+4. Recommended: switch the project to asymmetric JWT signing keys (**Settings → JWT Keys**), which Supabase advises for OAuth clients.
+
+Then, for each person: **Settings → Connected assistants** shows the address to copy and lists what has access, with **Remove**. In the assistant, add it as a custom connector / remote MCP server, sign in to Bite when the browser opens, and choose **Allow**:
+
+- **ChatGPT** (web, paid plans): Settings → Apps & Connectors → Advanced → turn on Developer mode, then create a connector with the address and OAuth.
+- **Claude**: Settings → Connectors → Add custom connector.
+- **Gemini CLI**: in `~/.gemini/settings.json`, `"mcpServers": { "bite": { "httpUrl": "https://<your-site>/api/mcp" } }`, then `/mcp auth`.
+
+How it fits together: `app/api/mcp/route.ts` checks the Bearer token (signed-in and still invited, like the AI routes), rate-limits, and runs one stateless request through `mcp/http.ts`. Without a token it answers 401 and points to `/.well-known/oauth-protected-resource/api/mcp`, which names Supabase Auth as the authorization server. `app/oauth/consent` is the approval page. The hosted server runs in UTC, so the app saves your device's time zone on your profile and the tools use it for "today" (fallback: `BITE_TIMEZONE`, then India).
+
+### Local: Claude Code and Claude Desktop
+
+1. Make sure `.env.local` has the Supabase settings (`npx vercel env pull .env.local`). The server reads only the public URL and anon key from it.
+2. Sign in once, in a terminal. Your password goes straight to Supabase; only the session is saved, in `~/.config/bite-mcp/session.json`, readable only by you:
+   ```bash
+   npm run mcp:login
+   ```
+3. Point your client at the server. Use full paths, and start it with `tsx` directly (`npm run` prints a banner that breaks the protocol).
+
+   **Claude Code:**
+   ```bash
+   claude mcp add bite -- /path/to/bite-tracker/node_modules/.bin/tsx /path/to/bite-tracker/mcp/server.ts
+   ```
+   **Claude Desktop** (Settings → Developer → Edit Config):
+   ```json
+   {
+     "mcpServers": {
+       "bite": {
+         "command": "/path/to/bite-tracker/node_modules/.bin/tsx",
+         "args": ["/path/to/bite-tracker/mcp/server.ts"]
+       }
+     }
+   }
+   ```
+
+`npm run mcp:login -- logout` forgets the session. The local server's "today" follows the app's 4 am day and this computer's clock. `mcp/tools.ts` holds the tools (tested over the protocol with an in-memory store in `tests/mcp.test.ts`), `mcp/store.ts` is the only part that talks to Supabase, `mcp/http.ts` is the hosted transport, and `mcp/auth.ts` handles the local session.
+
 ## AI providers
 
 Bring a key from any supported provider. Settings → AI shows what's active.
@@ -155,6 +221,7 @@ A service worker (`public/sw.js`, registered only in production) caches the app 
 - Verified by building with sentinel values and grepping `.next/static`. No key, passcode value, provider host or system prompt is in client JS.
 - The server logs only an error code and model name, never payloads or keys. Photos are analysed in memory and never stored.
 - Security headers on every route: `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, and a `Permissions-Policy` limiting device access to the camera (photos, barcodes) and microphone (voice). The service worker gets its own strict CSP.
+- An assistant connected over MCP acts as the person who approved it: it holds a Supabase user token, so row-level security and the invite check apply to it as they do to the app, and it can reach that person's Bite data (including saved meals and coach notes) but no one else's. Approve only assistants you trust; remove them under Settings → Connected assistants.
 - The coach's memory is plain text you can read and delete in the app; it's sent to the AI provider only with your own chat and review requests (OpenAI with `store: false`).
 
 ## Test inputs

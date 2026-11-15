@@ -49,6 +49,8 @@ export const LIMITS = {
   chat: { perMinute: 10, perDay: 120 },
   barcode: { perMinute: 20, perDay: 200 },
   status: { perMinute: 30, perDay: 1000 },
+  // Assistants connected over MCP: no AI cost, but every call reads or writes the database.
+  mcp: { perMinute: 60, perDay: 3000 },
 } as const;
 export type Route = keyof typeof LIMITS;
 
@@ -156,6 +158,18 @@ async function takeToken(token: string, who: string, route: Route): Promise<"ok"
     warnedFallback = true;
   }
   return rateLimit(`${route}:${who}`, perMinute, perDay);
+}
+
+/**
+ * For the hosted MCP endpoint, which answers in its own protocol: who is
+ * calling (a signed-in, invited user) and whether they're within limits.
+ */
+export async function authorize(req: Request, route: Route): Promise<{ ok: true; userId: string; token: string } | { ok: false; reason: "unauthorized" | "minute" | "day" }> {
+  if (!accountsEnabled) return { ok: false, reason: "unauthorized" };
+  const v = await verifyUser(req);
+  if ("error" in v) return { ok: false, reason: "unauthorized" };
+  const t = await takeToken(v.token, v.userId, route);
+  return t === "ok" ? { ok: true, userId: v.userId, token: v.token } : { ok: false, reason: t };
 }
 
 /** Common preamble for every AI route. Returns an error Response, or null to continue. */
